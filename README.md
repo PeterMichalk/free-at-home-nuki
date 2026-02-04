@@ -187,22 +187,3 @@ Weitere Informationen: [Nuki Bridge API Dokumentation](https://developer.nuki.io
 ## Lizenz
 
 MIT License - Siehe `fhstore/mit-en.txt` für Details.
-
-## Autor
-
-Busch Jaeger / tech.michalk.tech
-
-## Support
-
-Bei Problemen oder Fragen:
-- Prüfe die Logs mit `npm run journal`
-- Überprüfe die Nuki Bridge API-Verbindung
-- Stelle sicher, dass alle Konfigurationsparameter korrekt sind
-
-## Changelog
-
-### Version 1.0.0
-- Initiale Version
-- Unterstützung für mehrere Nuki-Schlösser
-- Automatische Status-Synchronisation
-- Verriegeln/Entriegeln über free@home
