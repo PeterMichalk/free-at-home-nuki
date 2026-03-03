@@ -1,6 +1,6 @@
 # free@home Nuki Addon
 
-Ein free@home Addon zur Integration von Nuki Smart Locks in das ABB free@home System. Dieses Addon ermöglicht es, mehrere Nuki-Schlösser über die free@home Zentrale zu steuern und deren Status zu überwachen.
+Ein free@home Addon zur Integration von Nuki Smart Locks in das Busch-Jäger/ABB free@home System. Dieses Addon ermöglicht es, mehrere Nuki-Schlösser über die free@home Zentrale zu steuern und deren Status zu überwachen.
 
 ## Features
 
