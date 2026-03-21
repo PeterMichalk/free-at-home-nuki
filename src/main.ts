@@ -1,18 +1,15 @@
 import { FreeAtHome, AddOn, PairingIds, FreeAtHomeRawChannel } from '@busch-jaeger/free-at-home';
 import * as http from 'http';
 
-const freeAtHome = new FreeAtHome();
-freeAtHome.activateSignalHandling();
-
 // Konstanten
 const NUKI_BRIDGE_PORT = 8080;
-const STATUS_UPDATE_INTERVAL_MS = 30000;
-const STATUS_UPDATE_DELAY_AFTER_ACTION_MS = 2000;
-const STATUS_UPDATE_DELAY_AFTER_ERROR_MS = 1000;
+export const STATUS_UPDATE_INTERVAL_MS = 30000;
+export const STATUS_UPDATE_DELAY_AFTER_ACTION_MS = 2000;
+export const STATUS_UPDATE_DELAY_AFTER_ERROR_MS = 1000;
 const CONFIG_LOAD_DELAY_MS = 2000;
 
 // Nuki Lock States
-enum NukiLockState {
+export enum NukiLockState {
   UNCALIBRATED = 0,
   LOCKED = 1,
   UNLOCKED = 2,
@@ -23,13 +20,13 @@ enum NukiLockState {
 }
 
 // Nuki Lock Actions
-enum NukiLockAction {
+export enum NukiLockAction {
   LOCK = 2,
   UNLOCK = 3
 }
 
 // Interfaces
-interface NukiLockStatus {
+export interface NukiLockStatus {
   nukiId: number;
   name: string;
   batteryCritical: boolean;
@@ -39,24 +36,24 @@ interface NukiLockStatus {
   success: boolean;
 }
 
-interface NukiLockConfig {
+export interface NukiLockConfig {
   id: string;
   name: string;
 }
 
-interface ManagedLock {
+export interface ManagedLock {
   config: NukiLockConfig;
   device: FreeAtHomeRawChannel;
   isUpdating: boolean;
   updateIntervalId?: NodeJS.Timeout;
 }
 
-interface NukiApiResponse {
+export interface NukiApiResponse {
   success: boolean;
   [key: string]: any;
 }
 
-interface NukiBridgeLock {
+export interface NukiBridgeLock {
   deviceType: number;
   nukiId: number;
   name: string;
@@ -72,14 +69,14 @@ interface NukiBridgeLock {
   };
 }
 
-interface AddOnConfiguration {
+export interface AddOnConfiguration {
   nukiBridgeIp?: string;
   nukiApiToken?: string;
   nukiLocks?: string;
 }
 
 // Nuki API Client
-class NukiApiClient {
+export class NukiApiClient {
   constructor(
     private bridgeIp: string,
     private apiToken: string
@@ -91,14 +88,14 @@ class NukiApiClient {
   private async httpGet(endpoint: string): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       const url = `http://${this.bridgeIp}:${NUKI_BRIDGE_PORT}${endpoint}`;
-      
+
       http.get(url, (res: http.IncomingMessage) => {
         let data = '';
-        
+
         res.on('data', (chunk: Buffer) => {
           data += chunk.toString();
         });
-        
+
         res.on('end', () => {
           resolve(data);
         });
@@ -115,20 +112,20 @@ class NukiApiClient {
     try {
       const response = await this.httpGet(`/list?token=${this.apiToken}`);
       const locks: NukiBridgeLock[] = JSON.parse(response);
-      
+
       const lock = locks.find((l) => l.nukiId.toString() === lockId);
-      
+
       if (!lock) {
         console.warn(`Nuki Lock mit ID ${lockId} nicht gefunden`);
         return null;
       }
-      
+
       const lastKnownState = lock.lastKnownState;
       if (!lastKnownState) {
         console.warn(`Nuki Lock mit ID ${lockId} hat keinen lastKnownState`);
         return null;
       }
-      
+
       return {
         nukiId: lock.nukiId,
         name: lock.name || '',
@@ -152,9 +149,9 @@ class NukiApiClient {
       const response = await this.httpGet(
         `/lockAction?token=${this.apiToken}&nukiId=${lockId}&action=${action}`
       );
-      
+
       const result: NukiApiResponse = JSON.parse(response);
-      
+
       if (result.success === true) {
         const actionName = action === NukiLockAction.LOCK ? 'verriegelt' : 'entriegelt';
         console.log(`Nuki Tür erfolgreich ${actionName} (Lock ID: ${lockId})`);
@@ -184,7 +181,7 @@ class NukiApiClient {
 }
 
 // Lock Manager - Verwaltet ein einzelnes Lock
-class LockManager {
+export class LockManager {
   private updateIntervalId?: NodeJS.Timeout;
 
   constructor(
@@ -205,7 +202,7 @@ class LockManager {
       if (this.managedLock.isUpdating) {
         return;
       }
-      
+
       if (id === PairingIds.AL_LOCK_UNLOCK_COMMAND) {
         await this.handleLockCommand(value === "1");
       }
@@ -215,17 +212,17 @@ class LockManager {
   /**
    * Behandelt Lock/Unlock Commands von free@home
    */
-  private async handleLockCommand(shouldLock: boolean): Promise<void> {
+  async handleLockCommand(shouldLock: boolean): Promise<void> {
     const action = shouldLock ? "VERRIEGELN" : "ENTRIEGELN";
     console.log(`[${this.config.name}] Lock Command: ${action}`);
-    
+
     try {
       if (shouldLock) {
         await this.apiClient.lock(this.config.id);
       } else {
         await this.apiClient.unlock(this.config.id);
       }
-      
+
       // Status nach Aktion aktualisieren
       setTimeout(() => this.updateStatus(), STATUS_UPDATE_DELAY_AFTER_ACTION_MS);
     } catch (error) {
@@ -241,28 +238,28 @@ class LockManager {
     if (this.managedLock.isUpdating) {
       return;
     }
-    
+
     try {
       const lockStatus = await this.apiClient.getLockStatus(this.config.id);
-      
+
       if (!lockStatus) {
         return;
       }
-      
+
       this.managedLock.isUpdating = true;
-      
+
       const isLocked = lockStatus.state === NukiLockState.LOCKED;
       await this.device.setOutputDatapoint(
         PairingIds.AL_INFO_LOCK_UNLOCK_COMMAND,
         isLocked ? "1" : "0"
       );
-      
+
       const statusText = isLocked ? "VERRIEGELT" : "ENTRIEGELT";
       console.log(
         `[${this.config.name}] Status aktualisiert: ${lockStatus.stateName} ` +
         `(State: ${lockStatus.state}) -> ${statusText}`
       );
-      
+
       this.managedLock.isUpdating = false;
     } catch (error) {
       console.error(`[${this.config.name}] Fehler beim Abfragen des Status:`, error);
@@ -276,7 +273,7 @@ class LockManager {
   private startStatusUpdates(): void {
     // Initialen Status abfragen
     this.updateStatus();
-    
+
     // Regelmäßig Status aktualisieren
     this.updateIntervalId = setInterval(() => {
       if (!this.managedLock.isUpdating) {
@@ -297,7 +294,7 @@ class LockManager {
 }
 
 // Konfigurations-Parser
-class ConfigurationParser {
+export class ConfigurationParser {
   /**
    * Parst die Lock-Konfiguration aus einem JSON-String
    */
@@ -305,18 +302,18 @@ class ConfigurationParser {
     if (!configString || typeof configString !== 'string') {
       return [];
     }
-    
+
     try {
       const parsed = JSON.parse(configString);
       if (Array.isArray(parsed)) {
-        return parsed.filter((item: any): item is NukiLockConfig => 
+        return parsed.filter((item: any): item is NukiLockConfig =>
           item && typeof item.id === 'string' && typeof item.name === 'string'
         );
       }
     } catch (error) {
       console.error("Fehler beim Parsen der Lock-Konfiguration:", error);
     }
-    
+
     return [];
   }
 
@@ -329,13 +326,13 @@ class ConfigurationParser {
     lockConfigs: NukiLockConfig[];
   } {
     const defaultConfig = config.default?.items as AddOnConfiguration | undefined;
-    
+
     return {
-      bridgeIp: (defaultConfig?.nukiBridgeIp && typeof defaultConfig.nukiBridgeIp === 'string') 
-        ? defaultConfig.nukiBridgeIp 
+      bridgeIp: (defaultConfig?.nukiBridgeIp && typeof defaultConfig.nukiBridgeIp === 'string')
+        ? defaultConfig.nukiBridgeIp
         : '',
-      apiToken: (defaultConfig?.nukiApiToken && typeof defaultConfig.nukiApiToken === 'string') 
-        ? defaultConfig.nukiApiToken 
+      apiToken: (defaultConfig?.nukiApiToken && typeof defaultConfig.nukiApiToken === 'string')
+        ? defaultConfig.nukiApiToken
         : '',
       lockConfigs: this.parseLockConfigs(
         defaultConfig?.nukiLocks && typeof defaultConfig.nukiLocks === 'string'
@@ -347,7 +344,7 @@ class ConfigurationParser {
 }
 
 // Hauptklasse für die Addon-Verwaltung
-class NukiAddonManager {
+export class NukiAddonManager {
   private bridgeIp: string = '';
   private apiToken: string = '';
   private lockConfigs: NukiLockConfig[] = [];
@@ -355,7 +352,10 @@ class NukiAddonManager {
   private lockManagers: Map<string, LockManager> = new Map();
   private apiClient: NukiApiClient | null = null;
 
-  constructor(private addOn: AddOn.AddOn) {
+  constructor(
+    private addOn: AddOn.AddOn,
+    private freeAtHome: FreeAtHome
+  ) {
     this.setupConfigurationHandler();
   }
 
@@ -367,20 +367,20 @@ class NukiAddonManager {
       console.log("Konfiguration geändert");
       await this.handleConfigurationChange(configuration);
     });
-    
+
     this.addOn.connectToConfiguration();
   }
 
   /**
    * Behandelt Konfigurationsänderungen
    */
-  private async handleConfigurationChange(configuration: AddOn.Configuration): Promise<void> {
+  async handleConfigurationChange(configuration: AddOn.Configuration): Promise<void> {
     const config = ConfigurationParser.extractConfiguration(configuration);
-    
+
     this.bridgeIp = config.bridgeIp;
     this.apiToken = config.apiToken;
     this.lockConfigs = config.lockConfigs;
-    
+
     // API Client neu erstellen, wenn sich Credentials geändert haben
     if (this.bridgeIp && this.apiToken) {
       this.apiClient = new NukiApiClient(this.bridgeIp, this.apiToken);
@@ -393,35 +393,35 @@ class NukiAddonManager {
   /**
    * Initialisiert alle konfigurierten Locks
    */
-  private async initializeLocks(): Promise<void> {
+  async initializeLocks(): Promise<void> {
     if (!this.apiClient) {
       return;
     }
-    
+
     // Entferne Locks, die nicht mehr in der Konfiguration sind
     this.removeObsoleteLocks();
-    
+
     // Erstelle neue Locks
     await this.createNewLocks();
-    
+
     console.log(`${this.managedLocks.size} Nuki Türschlösser initialisiert`);
   }
 
   /**
    * Entfernt Locks, die nicht mehr in der Konfiguration sind
    */
-  private removeObsoleteLocks(): void {
+  removeObsoleteLocks(): void {
     for (const [lockId, managedLock] of this.managedLocks.entries()) {
       if (!this.lockConfigs.find(c => c.id === lockId)) {
         console.log(`Lock ${lockId} entfernt`);
-        
+
         // Manager bereinigen
         const manager = this.lockManagers.get(lockId);
         if (manager) {
           manager.dispose();
           this.lockManagers.delete(lockId);
         }
-        
+
         this.managedLocks.delete(lockId);
       }
     }
@@ -430,11 +430,11 @@ class NukiAddonManager {
   /**
    * Erstellt neue Locks basierend auf der Konfiguration
    */
-  private async createNewLocks(): Promise<void> {
+  async createNewLocks(): Promise<void> {
     if (!this.apiClient) {
       return;
     }
-    
+
     for (const config of this.lockConfigs) {
       if (!this.managedLocks.has(config.id)) {
         await this.createLockDevice(config);
@@ -445,28 +445,28 @@ class NukiAddonManager {
   /**
    * Erstellt ein Lock-Gerät und den zugehörigen Manager
    */
-  private async createLockDevice(config: NukiLockConfig): Promise<void> {
+  async createLockDevice(config: NukiLockConfig): Promise<void> {
     if (!this.apiClient) {
       return;
     }
-    
+
     try {
       console.log(`Initialisiere Lock: ${config.name} (ID: ${config.id})`);
-      
+
       const deviceId = `nuki-lock-${config.id}`;
-      const device = await freeAtHome.createRawDevice(deviceId, config.name, "simple_doorlock");
+      const device = await this.freeAtHome.createRawDevice(deviceId, config.name, "simple_doorlock");
       device.setAutoKeepAlive(true);
       device.isAutoConfirm = true;
-      
+
       const managedLock: ManagedLock = {
         config: config,
         device: device,
         isUpdating: false
       };
-      
+
       // Erstelle Lock Manager
       const manager = new LockManager(config, device, this.apiClient, managedLock);
-      
+
       this.managedLocks.set(config.id, managedLock);
       this.lockManagers.set(config.id, manager);
     } catch (error) {
@@ -488,16 +488,22 @@ class NukiAddonManager {
 
 // Hauptfunktion
 async function main(): Promise<void> {
+  const freeAtHome = new FreeAtHome();
+  freeAtHome.activateSignalHandling();
+
   const metaData = AddOn.readMetaData();
   const addOn = new AddOn.AddOn(metaData.id);
-  
-  const manager = new NukiAddonManager(addOn);
+
+  const manager = new NukiAddonManager(addOn, freeAtHome);
   await manager.tryLoadInitialConfiguration();
-  
+
   console.log("Nuki Addon initialisiert");
 }
 
-main().catch((error) => {
-  console.error("Kritischer Fehler beim Starten des Addons:", error);
-  process.exit(1);
-});
+/* istanbul ignore next */
+if (require.main === module) {
+  main().catch((error) => {
+    console.error("Kritischer Fehler beim Starten des Addons:", error);
+    process.exit(1);
+  });
+}
