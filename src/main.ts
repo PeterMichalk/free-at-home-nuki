@@ -60,8 +60,6 @@ interface ManagedLock {
 interface ManagedBridge {
   config: NukiBridgeConfig;
   apiClient: NukiApiClient;
-  statusDevice: FreeAtHomeRawChannel | null;
-  isOnline: boolean | null;
   statusIntervalId?: NodeJS.Timeout;
 }
 
@@ -405,23 +403,20 @@ class NukiAddonManager {
   }
 
   /**
-   * Erstellt eine neue Bridge mit Status-Gerät und Locks
+   * Erstellt eine neue Bridge und startet Connectivity-Monitoring
    */
   private async createBridge(bridgeConfig: NukiBridgeConfig): Promise<void> {
     const apiClient = new NukiApiClient(bridgeConfig.ip, bridgeConfig.token);
 
     const managedBridge: ManagedBridge = {
       config: bridgeConfig,
-      apiClient,
-      statusDevice: null,
-      isOnline: null
+      apiClient
     };
 
     this.managedBridges.set(bridgeConfig.ip, managedBridge);
 
-    await this.createBridgeStatusDevice(managedBridge);
-    this.startBridgeStatusMonitoring(managedBridge);
     await this.initializeLocks(bridgeConfig, apiClient);
+    this.startBridgeConnectivityMonitoring(managedBridge);
 
     console.log(`Bridge ${bridgeConfig.ip} initialisiert`);
   }
@@ -448,57 +443,39 @@ class NukiAddonManager {
   }
 
   /**
-   * Erstellt das Bridge-Status-Gerät in free@home
+   * Prüft die Bridge-Verbindung und markiert Lock-Aktoren als unresponsive,
+   * wenn die Bridge nicht erreichbar ist.
    */
-  private async createBridgeStatusDevice(managedBridge: ManagedBridge): Promise<void> {
-    const bridgeIp = managedBridge.config.ip;
-    const deviceId = `nuki-bridge-status-${bridgeIp.replace(/\./g, '-')}`;
-    const deviceName = `Nuki Bridge ${bridgeIp}`;
-
-    try {
-      const device = await freeAtHome.createRawDevice(deviceId, deviceName, 'BinarySensor');
-      device.setAutoKeepAlive(true);
-      device.isAutoConfirm = true;
-      managedBridge.statusDevice = device;
-      console.log(`Bridge-Status-Gerät erstellt: ${deviceName}`);
-    } catch (error) {
-      console.error(`Fehler beim Erstellen des Bridge-Status-Geräts für ${bridgeIp}:`, error);
-    }
-  }
-
-  /**
-   * Aktualisiert den Verbindungsstatus einer Bridge in free@home
-   */
-  private async updateBridgeStatus(managedBridge: ManagedBridge): Promise<void> {
-    if (!managedBridge.statusDevice) {
-      return;
-    }
-
+  private async checkBridgeConnectivity(managedBridge: ManagedBridge): Promise<void> {
     const isOnline = await managedBridge.apiClient.checkConnection();
+    const bridgeIp = managedBridge.config.ip;
 
-    if (isOnline !== managedBridge.isOnline) {
-      managedBridge.isOnline = isOnline;
-      await managedBridge.statusDevice.setOutputDatapoint(
-        PairingIds.AL_INFO_ON_OFF,
-        isOnline ? "1" : "0"
-      );
-      const bridgeIp = managedBridge.config.ip;
-      console.log(`Nuki Bridge ${bridgeIp} ist ${isOnline ? 'erreichbar (online)' : 'nicht erreichbar (offline)'}`);
+    if (!isOnline) {
+      console.warn(`Nuki Bridge ${bridgeIp} nicht erreichbar – Aktoren werden deaktiviert`);
+      for (const [lockKey, managedLock] of this.managedLocks.entries()) {
+        if (lockKey.startsWith(`${bridgeIp}:`)) {
+          try {
+            await managedLock.device.setUnresponsive();
+          } catch (error) {
+            console.error(`Fehler beim Deaktivieren von ${managedLock.config.name}:`, error);
+          }
+        }
+      }
     }
   }
 
   /**
    * Startet die regelmäßige Verbindungsüberwachung einer Bridge
    */
-  private startBridgeStatusMonitoring(managedBridge: ManagedBridge): void {
+  private startBridgeConnectivityMonitoring(managedBridge: ManagedBridge): void {
     if (managedBridge.statusIntervalId) {
       clearInterval(managedBridge.statusIntervalId);
     }
 
-    this.updateBridgeStatus(managedBridge);
+    this.checkBridgeConnectivity(managedBridge);
 
     managedBridge.statusIntervalId = setInterval(
-      () => this.updateBridgeStatus(managedBridge),
+      () => this.checkBridgeConnectivity(managedBridge),
       BRIDGE_CONNECTION_CHECK_INTERVAL_MS
     );
   }
