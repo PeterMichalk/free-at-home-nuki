@@ -1,9 +1,9 @@
 {
   "name": "Nuki Smart Lock (local API) Integration",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "id": "tech.michalk.freeathome.nuki",
   "license": "MIT",
-  "description": "Integration von Nuki Smart Locks in das ABB free@home System. Unterstützt mehrere Schlösser mit automatischer Status-Synchronisation.",
+  "description": "Integration von Nuki Smart Locks in das ABB free@home System. Unterstützt mehrere Bridges und Schlösser mit automatischer Status-Synchronisation.",
   "url": "https://www.michalk.tech",
   "author": "Peter Michalk",
   "type": "app",
@@ -12,23 +12,25 @@
     "default": {
       "name": "Settings",
       "items": {
-        "nukiBridgeIp": {
-          "name": "Nuki Bridge IP",
+        "nukiBridges": {
+          "name": "Nuki Bridges (Multi-Bridge)",
           "type": "string",
-          "description": "IP-Adresse der Nuki Bridge im lokalen Netzwerk (z.B. 192.168.1.100)",
-          "required": true
+          "description": "JSON-Array mit allen Bridges und deren Schlössern. Format: [{\"ip\":\"192.168.1.100\",\"token\":\"abc123\",\"locks\":[{\"id\":\"111\",\"name\":\"Haustür\"}]},{\"ip\":\"192.168.1.101\",\"token\":\"def456\",\"locks\":[{\"id\":\"222\",\"name\":\"Büro\"}]}]"
+        },
+        "nukiBridgeIp": {
+          "name": "Nuki Bridge IP (Legacy)",
+          "type": "string",
+          "description": "IP-Adresse einer einzelnen Nuki Bridge (nur wenn nukiBridges nicht gesetzt). Z.B. 192.168.1.100"
         },
         "nukiApiToken": {
-          "name": "Nuki API Token",
+          "name": "Nuki API Token (Legacy)",
           "type": "string",
-          "description": "API Token für die Nuki Bridge (erhältlich in den Bridge-Einstellungen)",
-          "required": true
+          "description": "API Token der einzelnen Nuki Bridge (nur wenn nukiBridges nicht gesetzt)"
         },
         "nukiLocks": {
-          "name": "Nuki Locks",
+          "name": "Nuki Locks (Legacy)",
           "type": "string",
-          "description": "JSON-Array der zu verwaltenden Nuki Schlösser. Format: [{\"id\":\"123\",\"name\":\"Haustür\"},{\"id\":\"456\",\"name\":\"Garage\"}]",
-          "required": true
+          "description": "JSON-Array der Schlösser für die einzelne Bridge (nur wenn nukiBridges nicht gesetzt). Format: [{\"id\":\"123\",\"name\":\"Haustür\"}]"
         }
       }
     }

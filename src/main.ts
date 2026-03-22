@@ -9,7 +9,6 @@ const NUKI_BRIDGE_PORT = 8080;
 const STATUS_UPDATE_INTERVAL_MS = 30000;
 const STATUS_UPDATE_DELAY_AFTER_ACTION_MS = 2000;
 const STATUS_UPDATE_DELAY_AFTER_ERROR_MS = 1000;
-const CONFIG_LOAD_DELAY_MS = 2000;
 const BRIDGE_CONNECTION_CHECK_INTERVAL_MS = 60000;
 const BRIDGE_CONNECTION_TIMEOUT_MS = 5000;
 
@@ -46,11 +45,24 @@ interface NukiLockConfig {
   name: string;
 }
 
+interface NukiBridgeConfig {
+  ip: string;
+  token: string;
+  locks: NukiLockConfig[];
+}
+
 interface ManagedLock {
   config: NukiLockConfig;
   device: FreeAtHomeRawChannel;
   isUpdating: boolean;
-  updateIntervalId?: NodeJS.Timeout;
+}
+
+interface ManagedBridge {
+  config: NukiBridgeConfig;
+  apiClient: NukiApiClient;
+  statusDevice: FreeAtHomeRawChannel | null;
+  isOnline: boolean | null;
+  statusIntervalId?: NodeJS.Timeout;
 }
 
 interface NukiApiResponse {
@@ -75,9 +87,12 @@ interface NukiBridgeLock {
 }
 
 interface AddOnConfiguration {
+  // Legacy: einzelne Bridge
   nukiBridgeIp?: string;
   nukiApiToken?: string;
   nukiLocks?: string;
+  // Neu: mehrere Bridges als JSON-Array
+  nukiBridges?: string;
 }
 
 // Nuki API Client
@@ -134,20 +149,20 @@ class NukiApiClient {
     try {
       const response = await this.httpGet(`/list?token=${this.apiToken}`);
       const locks: NukiBridgeLock[] = JSON.parse(response);
-      
+
       const lock = locks.find((l) => l.nukiId.toString() === lockId);
-      
+
       if (!lock) {
         console.warn(`Nuki Lock mit ID ${lockId} nicht gefunden`);
         return null;
       }
-      
+
       const lastKnownState = lock.lastKnownState;
       if (!lastKnownState) {
         console.warn(`Nuki Lock mit ID ${lockId} hat keinen lastKnownState`);
         return null;
       }
-      
+
       return {
         nukiId: lock.nukiId,
         name: lock.name || '',
@@ -171,9 +186,9 @@ class NukiApiClient {
       const response = await this.httpGet(
         `/lockAction?token=${this.apiToken}&nukiId=${lockId}&action=${action}`
       );
-      
+
       const result: NukiApiResponse = JSON.parse(response);
-      
+
       if (result.success === true) {
         const actionName = action === NukiLockAction.LOCK ? 'verriegelt' : 'entriegelt';
         console.log(`Nuki Tür erfolgreich ${actionName} (Lock ID: ${lockId})`);
@@ -224,7 +239,7 @@ class LockManager {
       if (this.managedLock.isUpdating) {
         return;
       }
-      
+
       if (id === PairingIds.AL_LOCK_UNLOCK_COMMAND) {
         await this.handleLockCommand(value === "1");
       }
@@ -237,15 +252,14 @@ class LockManager {
   private async handleLockCommand(shouldLock: boolean): Promise<void> {
     const action = shouldLock ? "VERRIEGELN" : "ENTRIEGELN";
     console.log(`[${this.config.name}] Lock Command: ${action}`);
-    
+
     try {
       if (shouldLock) {
         await this.apiClient.lock(this.config.id);
       } else {
         await this.apiClient.unlock(this.config.id);
       }
-      
-      // Status nach Aktion aktualisieren
+
       setTimeout(() => this.updateStatus(), STATUS_UPDATE_DELAY_AFTER_ACTION_MS);
     } catch (error) {
       console.error(`[${this.config.name}] Fehler beim ${action}:`, error);
@@ -260,28 +274,28 @@ class LockManager {
     if (this.managedLock.isUpdating) {
       return;
     }
-    
+
     try {
       const lockStatus = await this.apiClient.getLockStatus(this.config.id);
-      
+
       if (!lockStatus) {
         return;
       }
-      
+
       this.managedLock.isUpdating = true;
-      
+
       const isLocked = lockStatus.state === NukiLockState.LOCKED;
       await this.device.setOutputDatapoint(
         PairingIds.AL_INFO_LOCK_UNLOCK_COMMAND,
         isLocked ? "1" : "0"
       );
-      
+
       const statusText = isLocked ? "VERRIEGELT" : "ENTRIEGELT";
       console.log(
         `[${this.config.name}] Status aktualisiert: ${lockStatus.stateName} ` +
         `(State: ${lockStatus.state}) -> ${statusText}`
       );
-      
+
       this.managedLock.isUpdating = false;
     } catch (error) {
       console.error(`[${this.config.name}] Fehler beim Abfragen des Status:`, error);
@@ -293,10 +307,8 @@ class LockManager {
    * Startet regelmäßige Status-Updates
    */
   private startStatusUpdates(): void {
-    // Initialen Status abfragen
     this.updateStatus();
-    
-    // Regelmäßig Status aktualisieren
+
     this.updateIntervalId = setInterval(() => {
       if (!this.managedLock.isUpdating) {
         this.updateStatus();
@@ -324,58 +336,73 @@ class ConfigurationParser {
     if (!configString || typeof configString !== 'string') {
       return [];
     }
-    
+
     try {
       const parsed = JSON.parse(configString);
       if (Array.isArray(parsed)) {
-        return parsed.filter((item: any): item is NukiLockConfig => 
+        return parsed.filter((item: any): item is NukiLockConfig =>
           item && typeof item.id === 'string' && typeof item.name === 'string'
         );
       }
     } catch (error) {
       console.error("Fehler beim Parsen der Lock-Konfiguration:", error);
     }
-    
+
     return [];
   }
 
   /**
-   * Extrahiert Konfigurationswerte aus der AddOn-Konfiguration
+   * Extrahiert alle Bridge-Konfigurationen.
+   * Unterstützt das neue Multi-Bridge-Format (nukiBridges) sowie das
+   * Legacy-Format mit einzelnen Feldern (nukiBridgeIp / nukiApiToken / nukiLocks).
    */
-  static extractConfiguration(config: AddOn.Configuration): {
-    bridgeIp: string;
-    apiToken: string;
-    lockConfigs: NukiLockConfig[];
-  } {
+  static extractBridgeConfigs(config: AddOn.Configuration): NukiBridgeConfig[] {
     const defaultConfig = config.default?.items as AddOnConfiguration | undefined;
-    
-    return {
-      bridgeIp: (defaultConfig?.nukiBridgeIp && typeof defaultConfig.nukiBridgeIp === 'string') 
-        ? defaultConfig.nukiBridgeIp 
-        : '',
-      apiToken: (defaultConfig?.nukiApiToken && typeof defaultConfig.nukiApiToken === 'string') 
-        ? defaultConfig.nukiApiToken 
-        : '',
-      lockConfigs: this.parseLockConfigs(
-        defaultConfig?.nukiLocks && typeof defaultConfig.nukiLocks === 'string'
-          ? defaultConfig.nukiLocks
-          : undefined
-      )
-    };
+
+    // Neues Multi-Bridge-Format
+    if (defaultConfig?.nukiBridges && typeof defaultConfig.nukiBridges === 'string') {
+      try {
+        const parsed = JSON.parse(defaultConfig.nukiBridges);
+        if (Array.isArray(parsed)) {
+          const bridges = parsed.filter((b: any): b is NukiBridgeConfig =>
+            b &&
+            typeof b.ip === 'string' && b.ip &&
+            typeof b.token === 'string' && b.token &&
+            Array.isArray(b.locks)
+          );
+          if (bridges.length > 0) {
+            return bridges;
+          }
+        }
+      } catch (error) {
+        console.error("Fehler beim Parsen der Bridge-Konfiguration (nukiBridges):", error);
+      }
+    }
+
+    // Legacy: einzelne Bridge
+    const ip = (defaultConfig?.nukiBridgeIp && typeof defaultConfig.nukiBridgeIp === 'string')
+      ? defaultConfig.nukiBridgeIp : '';
+    const token = (defaultConfig?.nukiApiToken && typeof defaultConfig.nukiApiToken === 'string')
+      ? defaultConfig.nukiApiToken : '';
+    const locks = this.parseLockConfigs(
+      defaultConfig?.nukiLocks && typeof defaultConfig.nukiLocks === 'string'
+        ? defaultConfig.nukiLocks : undefined
+    );
+
+    if (ip && token) {
+      return [{ ip, token, locks }];
+    }
+
+    console.warn("Keine gültige Bridge-Konfiguration gefunden");
+    return [];
   }
 }
 
 // Hauptklasse für die Addon-Verwaltung
 class NukiAddonManager {
-  private bridgeIp: string = '';
-  private apiToken: string = '';
-  private lockConfigs: NukiLockConfig[] = [];
+  private managedBridges: Map<string, ManagedBridge> = new Map();
   private managedLocks: Map<string, ManagedLock> = new Map();
   private lockManagers: Map<string, LockManager> = new Map();
-  private apiClient: NukiApiClient | null = null;
-  private bridgeStatusDevice: FreeAtHomeRawChannel | null = null;
-  private bridgeStatusIntervalId?: NodeJS.Timeout;
-  private isBridgeOnline: boolean | null = null;
 
   constructor(private addOn: AddOn.AddOn) {
     this.setupConfigurationHandler();
@@ -389,7 +416,7 @@ class NukiAddonManager {
       console.log("Konfiguration geändert");
       await this.handleConfigurationChange(configuration);
     });
-    
+
     this.addOn.connectToConfiguration();
   }
 
@@ -397,171 +424,188 @@ class NukiAddonManager {
    * Behandelt Konfigurationsänderungen
    */
   private async handleConfigurationChange(configuration: AddOn.Configuration): Promise<void> {
-    const config = ConfigurationParser.extractConfiguration(configuration);
-    
-    this.bridgeIp = config.bridgeIp;
-    this.apiToken = config.apiToken;
-    this.lockConfigs = config.lockConfigs;
-    
-    // API Client neu erstellen, wenn sich Credentials geändert haben
-    if (this.bridgeIp && this.apiToken) {
-      this.apiClient = new NukiApiClient(this.bridgeIp, this.apiToken);
-      await this.createBridgeStatusDevice();
-      this.startBridgeStatusMonitoring();
-      await this.initializeLocks();
-    } else {
-      console.warn("Nuki Bridge IP oder API Token fehlt in der Konfiguration");
-    }
-  }
+    const bridgeConfigs = ConfigurationParser.extractBridgeConfigs(configuration);
 
-  /**
-   * Initialisiert alle konfigurierten Locks
-   */
-  private async initializeLocks(): Promise<void> {
-    if (!this.apiClient) {
-      return;
-    }
-    
-    // Entferne Locks, die nicht mehr in der Konfiguration sind
-    this.removeObsoleteLocks();
-    
-    // Erstelle neue Locks
-    await this.createNewLocks();
-    
-    console.log(`${this.managedLocks.size} Nuki Türschlösser initialisiert`);
-  }
-
-  /**
-   * Entfernt Locks, die nicht mehr in der Konfiguration sind
-   */
-  private removeObsoleteLocks(): void {
-    for (const [lockId, managedLock] of this.managedLocks.entries()) {
-      if (!this.lockConfigs.find(c => c.id === lockId)) {
-        console.log(`Lock ${lockId} entfernt`);
-        
-        // Manager bereinigen
-        const manager = this.lockManagers.get(lockId);
-        if (manager) {
-          manager.dispose();
-          this.lockManagers.delete(lockId);
-        }
-        
-        this.managedLocks.delete(lockId);
+    // Entferne Bridges, die nicht mehr konfiguriert sind
+    for (const [bridgeIp, managedBridge] of this.managedBridges.entries()) {
+      if (!bridgeConfigs.find(b => b.ip === bridgeIp)) {
+        this.disposeBridge(bridgeIp, managedBridge);
+        this.managedBridges.delete(bridgeIp);
       }
     }
-  }
 
-  /**
-   * Erstellt neue Locks basierend auf der Konfiguration
-   */
-  private async createNewLocks(): Promise<void> {
-    if (!this.apiClient) {
-      return;
-    }
-    
-    for (const config of this.lockConfigs) {
-      if (!this.managedLocks.has(config.id)) {
-        await this.createLockDevice(config);
+    // Neue Bridges hinzufügen; bestehende Locks aktualisieren
+    for (const bridgeConfig of bridgeConfigs) {
+      if (!this.managedBridges.has(bridgeConfig.ip)) {
+        await this.createBridge(bridgeConfig);
+      } else {
+        const managedBridge = this.managedBridges.get(bridgeConfig.ip)!;
+        managedBridge.config = bridgeConfig;
+        await this.initializeLocks(bridgeConfig, managedBridge.apiClient);
       }
     }
+
+    console.log(`${this.managedBridges.size} Nuki Bridge(s) konfiguriert`);
   }
 
   /**
-   * Erstellt ein Lock-Gerät und den zugehörigen Manager
+   * Erstellt eine neue Bridge mit Status-Gerät und Locks
    */
-  private async createLockDevice(config: NukiLockConfig): Promise<void> {
-    if (!this.apiClient) {
-      return;
+  private async createBridge(bridgeConfig: NukiBridgeConfig): Promise<void> {
+    const apiClient = new NukiApiClient(bridgeConfig.ip, bridgeConfig.token);
+
+    const managedBridge: ManagedBridge = {
+      config: bridgeConfig,
+      apiClient,
+      statusDevice: null,
+      isOnline: null
+    };
+
+    this.managedBridges.set(bridgeConfig.ip, managedBridge);
+
+    await this.createBridgeStatusDevice(managedBridge);
+    this.startBridgeStatusMonitoring(managedBridge);
+    await this.initializeLocks(bridgeConfig, apiClient);
+
+    console.log(`Bridge ${bridgeConfig.ip} initialisiert`);
+  }
+
+  /**
+   * Bereinigt alle Ressourcen einer Bridge
+   */
+  private disposeBridge(bridgeIp: string, managedBridge: ManagedBridge): void {
+    if (managedBridge.statusIntervalId) {
+      clearInterval(managedBridge.statusIntervalId);
     }
-    
-    try {
-      console.log(`Initialisiere Lock: ${config.name} (ID: ${config.id})`);
-      
-      const deviceId = `nuki-lock-${config.id}`;
-      const device = await freeAtHome.createRawDevice(deviceId, config.name, "simple_doorlock");
-      device.setAutoKeepAlive(true);
-      device.isAutoConfirm = true;
-      
-      const managedLock: ManagedLock = {
-        config: config,
-        device: device,
-        isUpdating: false
-      };
-      
-      // Erstelle Lock Manager
-      const manager = new LockManager(config, device, this.apiClient, managedLock);
-      
-      this.managedLocks.set(config.id, managedLock);
-      this.lockManagers.set(config.id, manager);
-    } catch (error) {
-      console.error(`Fehler beim Erstellen des Lock-Geräts für ${config.name}:`, error);
+
+    for (const lockConfig of managedBridge.config.locks) {
+      const lockKey = `${bridgeIp}:${lockConfig.id}`;
+      const manager = this.lockManagers.get(lockKey);
+      if (manager) {
+        manager.dispose();
+        this.lockManagers.delete(lockKey);
+      }
+      this.managedLocks.delete(lockKey);
     }
+
+    console.log(`Bridge ${bridgeIp} entfernt`);
   }
 
   /**
    * Erstellt das Bridge-Status-Gerät in free@home
    */
-  private async createBridgeStatusDevice(): Promise<void> {
-    if (this.bridgeStatusDevice) {
-      return;
-    }
+  private async createBridgeStatusDevice(managedBridge: ManagedBridge): Promise<void> {
+    const bridgeIp = managedBridge.config.ip;
+    const deviceId = `nuki-bridge-status-${bridgeIp.replace(/\./g, '-')}`;
+    const deviceName = `Nuki Bridge ${bridgeIp}`;
 
     try {
-      const device = await freeAtHome.createRawDevice('nuki-bridge-status', 'Nuki Bridge Status', 'BinarySensor');
+      const device = await freeAtHome.createRawDevice(deviceId, deviceName, 'BinarySensor');
       device.setAutoKeepAlive(true);
       device.isAutoConfirm = true;
-      this.bridgeStatusDevice = device;
-      console.log("Bridge-Status-Gerät erstellt");
+      managedBridge.statusDevice = device;
+      console.log(`Bridge-Status-Gerät erstellt: ${deviceName}`);
     } catch (error) {
-      console.error("Fehler beim Erstellen des Bridge-Status-Geräts:", error);
+      console.error(`Fehler beim Erstellen des Bridge-Status-Geräts für ${bridgeIp}:`, error);
     }
   }
 
   /**
-   * Aktualisiert den Verbindungsstatus der Bridge in free@home
+   * Aktualisiert den Verbindungsstatus einer Bridge in free@home
    */
-  private async updateBridgeStatus(): Promise<void> {
-    if (!this.apiClient || !this.bridgeStatusDevice) {
+  private async updateBridgeStatus(managedBridge: ManagedBridge): Promise<void> {
+    if (!managedBridge.statusDevice) {
       return;
     }
 
-    const isOnline = await this.apiClient.checkConnection();
+    const isOnline = await managedBridge.apiClient.checkConnection();
 
-    if (isOnline !== this.isBridgeOnline) {
-      this.isBridgeOnline = isOnline;
-      await this.bridgeStatusDevice.setOutputDatapoint(
+    if (isOnline !== managedBridge.isOnline) {
+      managedBridge.isOnline = isOnline;
+      await managedBridge.statusDevice.setOutputDatapoint(
         PairingIds.AL_INFO_ON_OFF,
         isOnline ? "1" : "0"
       );
-      console.log(`Nuki Bridge ist ${isOnline ? 'erreichbar (online)' : 'nicht erreichbar (offline)'}`);
+      const bridgeIp = managedBridge.config.ip;
+      console.log(`Nuki Bridge ${bridgeIp} ist ${isOnline ? 'erreichbar (online)' : 'nicht erreichbar (offline)'}`);
     }
   }
 
   /**
-   * Startet die regelmäßige Überwachung der Bridge-Verbindung
+   * Startet die regelmäßige Verbindungsüberwachung einer Bridge
    */
-  private startBridgeStatusMonitoring(): void {
-    if (this.bridgeStatusIntervalId) {
-      clearInterval(this.bridgeStatusIntervalId);
+  private startBridgeStatusMonitoring(managedBridge: ManagedBridge): void {
+    if (managedBridge.statusIntervalId) {
+      clearInterval(managedBridge.statusIntervalId);
     }
 
-    this.updateBridgeStatus();
+    this.updateBridgeStatus(managedBridge);
 
-    this.bridgeStatusIntervalId = setInterval(
-      () => this.updateBridgeStatus(),
+    managedBridge.statusIntervalId = setInterval(
+      () => this.updateBridgeStatus(managedBridge),
       BRIDGE_CONNECTION_CHECK_INTERVAL_MS
     );
   }
 
   /**
-   * Versucht eine initiale Konfiguration zu laden
+   * Synchronisiert die Locks einer Bridge mit der Konfiguration
    */
-  async tryLoadInitialConfiguration(): Promise<void> {
-    setTimeout(async () => {
-      if (this.managedLocks.size === 0 && this.lockConfigs.length > 0 && this.apiClient) {
-        await this.initializeLocks();
+  private async initializeLocks(bridgeConfig: NukiBridgeConfig, apiClient: NukiApiClient): Promise<void> {
+    const bridgeIp = bridgeConfig.ip;
+
+    // Entferne Locks, die nicht mehr konfiguriert sind
+    for (const [lockKey, managedLock] of this.managedLocks.entries()) {
+      if (!lockKey.startsWith(`${bridgeIp}:`)) {
+        continue;
       }
-    }, CONFIG_LOAD_DELAY_MS);
+      if (!bridgeConfig.locks.find(l => l.id === managedLock.config.id)) {
+        const manager = this.lockManagers.get(lockKey);
+        if (manager) {
+          manager.dispose();
+          this.lockManagers.delete(lockKey);
+        }
+        this.managedLocks.delete(lockKey);
+        console.log(`Lock ${managedLock.config.id} von Bridge ${bridgeIp} entfernt`);
+      }
+    }
+
+    // Neue Locks erstellen
+    for (const lockConfig of bridgeConfig.locks) {
+      const lockKey = `${bridgeIp}:${lockConfig.id}`;
+      if (!this.managedLocks.has(lockKey)) {
+        await this.createLockDevice(lockConfig, bridgeIp, apiClient);
+      }
+    }
+
+    console.log(`${bridgeConfig.locks.length} Schloss/Schlösser für Bridge ${bridgeIp} konfiguriert`);
+  }
+
+  /**
+   * Erstellt ein Lock-Gerät und den zugehörigen Manager
+   */
+  private async createLockDevice(config: NukiLockConfig, bridgeIp: string, apiClient: NukiApiClient): Promise<void> {
+    try {
+      console.log(`Initialisiere Lock: ${config.name} (ID: ${config.id}) an Bridge ${bridgeIp}`);
+
+      const deviceId = `nuki-lock-${bridgeIp.replace(/\./g, '-')}-${config.id}`;
+      const device = await freeAtHome.createRawDevice(deviceId, config.name, "simple_doorlock");
+      device.setAutoKeepAlive(true);
+      device.isAutoConfirm = true;
+
+      const managedLock: ManagedLock = {
+        config,
+        device,
+        isUpdating: false
+      };
+
+      const lockKey = `${bridgeIp}:${config.id}`;
+      const manager = new LockManager(config, device, apiClient, managedLock);
+
+      this.managedLocks.set(lockKey, managedLock);
+      this.lockManagers.set(lockKey, manager);
+    } catch (error) {
+      console.error(`Fehler beim Erstellen des Lock-Geräts für ${config.name}:`, error);
+    }
   }
 }
 
@@ -569,10 +613,9 @@ class NukiAddonManager {
 async function main(): Promise<void> {
   const metaData = AddOn.readMetaData();
   const addOn = new AddOn.AddOn(metaData.id);
-  
-  const manager = new NukiAddonManager(addOn);
-  await manager.tryLoadInitialConfiguration();
-  
+
+  new NukiAddonManager(addOn);
+
   console.log("Nuki Addon initialisiert");
 }
 
