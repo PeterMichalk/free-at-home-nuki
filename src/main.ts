@@ -87,11 +87,6 @@ interface NukiBridgeLock {
 }
 
 interface AddOnConfiguration {
-  // Legacy: einzelne Bridge
-  nukiBridgeIp?: string;
-  nukiApiToken?: string;
-  nukiLocks?: string;
-  // Neu: mehrere Bridges als JSON-Array
   nukiBridges?: string;
 }
 
@@ -330,36 +325,11 @@ class LockManager {
 // Konfigurations-Parser
 class ConfigurationParser {
   /**
-   * Parst die Lock-Konfiguration aus einem JSON-String
-   */
-  static parseLockConfigs(configString: string | undefined): NukiLockConfig[] {
-    if (!configString || typeof configString !== 'string') {
-      return [];
-    }
-
-    try {
-      const parsed = JSON.parse(configString);
-      if (Array.isArray(parsed)) {
-        return parsed.filter((item: any): item is NukiLockConfig =>
-          item && typeof item.id === 'string' && typeof item.name === 'string'
-        );
-      }
-    } catch (error) {
-      console.error("Fehler beim Parsen der Lock-Konfiguration:", error);
-    }
-
-    return [];
-  }
-
-  /**
-   * Extrahiert alle Bridge-Konfigurationen.
-   * Unterstützt das neue Multi-Bridge-Format (nukiBridges) sowie das
-   * Legacy-Format mit einzelnen Feldern (nukiBridgeIp / nukiApiToken / nukiLocks).
+   * Extrahiert alle Bridge-Konfigurationen aus dem nukiBridges JSON-Array.
    */
   static extractBridgeConfigs(config: AddOn.Configuration): NukiBridgeConfig[] {
     const defaultConfig = config.default?.items as AddOnConfiguration | undefined;
 
-    // Neues Multi-Bridge-Format
     if (defaultConfig?.nukiBridges && typeof defaultConfig.nukiBridges === 'string') {
       try {
         const parsed = JSON.parse(defaultConfig.nukiBridges);
@@ -375,22 +345,8 @@ class ConfigurationParser {
           }
         }
       } catch (error) {
-        console.error("Fehler beim Parsen der Bridge-Konfiguration (nukiBridges):", error);
+        console.error("Fehler beim Parsen der Bridge-Konfiguration:", error);
       }
-    }
-
-    // Legacy: einzelne Bridge
-    const ip = (defaultConfig?.nukiBridgeIp && typeof defaultConfig.nukiBridgeIp === 'string')
-      ? defaultConfig.nukiBridgeIp : '';
-    const token = (defaultConfig?.nukiApiToken && typeof defaultConfig.nukiApiToken === 'string')
-      ? defaultConfig.nukiApiToken : '';
-    const locks = this.parseLockConfigs(
-      defaultConfig?.nukiLocks && typeof defaultConfig.nukiLocks === 'string'
-        ? defaultConfig.nukiLocks : undefined
-    );
-
-    if (ip && token) {
-      return [{ ip, token, locks }];
     }
 
     console.warn("Keine gültige Bridge-Konfiguration gefunden");
