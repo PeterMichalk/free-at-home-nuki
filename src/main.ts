@@ -10,6 +10,8 @@ const STATUS_UPDATE_INTERVAL_MS = 30000;
 const STATUS_UPDATE_DELAY_AFTER_ACTION_MS = 2000;
 const STATUS_UPDATE_DELAY_AFTER_ERROR_MS = 1000;
 const CONFIG_LOAD_DELAY_MS = 2000;
+const BRIDGE_CONNECTION_CHECK_INTERVAL_MS = 60000;
+const BRIDGE_CONNECTION_TIMEOUT_MS = 5000;
 
 // Nuki Lock States
 enum NukiLockState {
@@ -88,24 +90,41 @@ class NukiApiClient {
   /**
    * Führt einen HTTP GET Request zur Nuki Bridge API aus
    */
-  private async httpGet(endpoint: string): Promise<string> {
+  private async httpGet(endpoint: string, timeoutMs: number = 10000): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       const url = `http://${this.bridgeIp}:${NUKI_BRIDGE_PORT}${endpoint}`;
-      
-      http.get(url, (res: http.IncomingMessage) => {
+
+      const req = http.get(url, (res: http.IncomingMessage) => {
         let data = '';
-        
+
         res.on('data', (chunk: Buffer) => {
           data += chunk.toString();
         });
-        
+
         res.on('end', () => {
           resolve(data);
         });
       }).on('error', (error: Error) => {
         reject(error);
       });
+
+      req.setTimeout(timeoutMs, () => {
+        req.destroy();
+        reject(new Error('Request timeout'));
+      });
     });
+  }
+
+  /**
+   * Prüft ob die Nuki Bridge erreichbar ist
+   */
+  async checkConnection(): Promise<boolean> {
+    try {
+      await this.httpGet(`/info?token=${this.apiToken}`, BRIDGE_CONNECTION_TIMEOUT_MS);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -354,6 +373,9 @@ class NukiAddonManager {
   private managedLocks: Map<string, ManagedLock> = new Map();
   private lockManagers: Map<string, LockManager> = new Map();
   private apiClient: NukiApiClient | null = null;
+  private bridgeStatusDevice: FreeAtHomeRawChannel | null = null;
+  private bridgeStatusIntervalId?: NodeJS.Timeout;
+  private isBridgeOnline: boolean | null = null;
 
   constructor(private addOn: AddOn.AddOn) {
     this.setupConfigurationHandler();
@@ -384,6 +406,8 @@ class NukiAddonManager {
     // API Client neu erstellen, wenn sich Credentials geändert haben
     if (this.bridgeIp && this.apiToken) {
       this.apiClient = new NukiApiClient(this.bridgeIp, this.apiToken);
+      await this.createBridgeStatusDevice();
+      this.startBridgeStatusMonitoring();
       await this.initializeLocks();
     } else {
       console.warn("Nuki Bridge IP oder API Token fehlt in der Konfiguration");
@@ -472,6 +496,61 @@ class NukiAddonManager {
     } catch (error) {
       console.error(`Fehler beim Erstellen des Lock-Geräts für ${config.name}:`, error);
     }
+  }
+
+  /**
+   * Erstellt das Bridge-Status-Gerät in free@home
+   */
+  private async createBridgeStatusDevice(): Promise<void> {
+    if (this.bridgeStatusDevice) {
+      return;
+    }
+
+    try {
+      const device = await freeAtHome.createRawDevice('nuki-bridge-status', 'Nuki Bridge Status', 'BinarySensor');
+      device.setAutoKeepAlive(true);
+      device.isAutoConfirm = true;
+      this.bridgeStatusDevice = device;
+      console.log("Bridge-Status-Gerät erstellt");
+    } catch (error) {
+      console.error("Fehler beim Erstellen des Bridge-Status-Geräts:", error);
+    }
+  }
+
+  /**
+   * Aktualisiert den Verbindungsstatus der Bridge in free@home
+   */
+  private async updateBridgeStatus(): Promise<void> {
+    if (!this.apiClient || !this.bridgeStatusDevice) {
+      return;
+    }
+
+    const isOnline = await this.apiClient.checkConnection();
+
+    if (isOnline !== this.isBridgeOnline) {
+      this.isBridgeOnline = isOnline;
+      await this.bridgeStatusDevice.setOutputDatapoint(
+        PairingIds.AL_INFO_ON_OFF,
+        isOnline ? "1" : "0"
+      );
+      console.log(`Nuki Bridge ist ${isOnline ? 'erreichbar (online)' : 'nicht erreichbar (offline)'}`);
+    }
+  }
+
+  /**
+   * Startet die regelmäßige Überwachung der Bridge-Verbindung
+   */
+  private startBridgeStatusMonitoring(): void {
+    if (this.bridgeStatusIntervalId) {
+      clearInterval(this.bridgeStatusIntervalId);
+    }
+
+    this.updateBridgeStatus();
+
+    this.bridgeStatusIntervalId = setInterval(
+      () => this.updateBridgeStatus(),
+      BRIDGE_CONNECTION_CHECK_INTERVAL_MS
+    );
   }
 
   /**
