@@ -26,7 +26,8 @@ enum NukiLockState {
 // Nuki Lock Actions
 enum NukiLockAction {
   LOCK = 2,
-  UNLOCK = 3
+  UNLOCK = 3,
+  UNLATCH = 4
 }
 
 // Interfaces
@@ -54,6 +55,7 @@ interface NukiBridgeConfig {
 interface ManagedLock {
   config: NukiLockConfig;
   device: FreeAtHomeRawChannel;
+  unlatchDevice: FreeAtHomeRawChannel | null;
   isUpdating: boolean;
 }
 
@@ -185,7 +187,12 @@ class NukiApiClient {
       const result: NukiApiResponse = JSON.parse(response);
 
       if (result.success === true) {
-        const actionName = action === NukiLockAction.LOCK ? 'verriegelt' : 'entriegelt';
+        const actionNames: Record<number, string> = {
+          [NukiLockAction.LOCK]: 'verriegelt',
+          [NukiLockAction.UNLOCK]: 'entriegelt',
+          [NukiLockAction.UNLATCH]: 'geöffnet (Türöffner)',
+        };
+        const actionName = actionNames[action] ?? `Aktion ${action} ausgeführt`;
         console.log(`Nuki Tür erfolgreich ${actionName} (Lock ID: ${lockId})`);
         return true;
       } else {
@@ -209,6 +216,13 @@ class NukiApiClient {
    */
   async unlock(lockId: string): Promise<boolean> {
     return this.executeLockAction(lockId, NukiLockAction.UNLOCK);
+  }
+
+  /**
+   * Öffnet die Türfalle (Unlatch / Türöffner)
+   */
+  async unlatch(lockId: string): Promise<boolean> {
+    return this.executeLockAction(lockId, NukiLockAction.UNLATCH);
   }
 }
 
@@ -239,6 +253,14 @@ class LockManager {
         await this.handleLockCommand(value === "1");
       }
     });
+
+    if (this.managedLock.unlatchDevice) {
+      this.managedLock.unlatchDevice.on('datapointChanged', async (id: PairingIds, value: string) => {
+        if (id === PairingIds.AL_SWITCH_ON_OFF && value === "1") {
+          await this.handleUnlatchCommand();
+        }
+      });
+    }
   }
 
   /**
@@ -258,6 +280,32 @@ class LockManager {
       setTimeout(() => this.updateStatus(), STATUS_UPDATE_DELAY_AFTER_ACTION_MS);
     } catch (error) {
       console.error(`[${this.config.name}] Fehler beim ${action}:`, error);
+      setTimeout(() => this.updateStatus(), STATUS_UPDATE_DELAY_AFTER_ERROR_MS);
+    }
+  }
+
+  /**
+   * Behandelt den Türöffner-Command (Unlatch) von free@home
+   */
+  private async handleUnlatchCommand(): Promise<void> {
+    console.log(`[${this.config.name}] Türöffner-Command: ENTRIEGELN (Unlatch)`);
+
+    try {
+      await this.apiClient.unlatch(this.config.id);
+
+      // Schalter nach Aktion zurücksetzen
+      if (this.managedLock.unlatchDevice) {
+        await this.managedLock.unlatchDevice.setOutputDatapoint(PairingIds.AL_INFO_ON_OFF, "0");
+      }
+
+      setTimeout(() => this.updateStatus(), STATUS_UPDATE_DELAY_AFTER_ACTION_MS);
+    } catch (error) {
+      console.error(`[${this.config.name}] Fehler beim Türöffner:`, error);
+
+      if (this.managedLock.unlatchDevice) {
+        await this.managedLock.unlatchDevice.setOutputDatapoint(PairingIds.AL_INFO_ON_OFF, "0");
+      }
+
       setTimeout(() => this.updateStatus(), STATUS_UPDATE_DELAY_AFTER_ERROR_MS);
     }
   }
@@ -548,9 +596,19 @@ class NukiAddonManager {
       device.setAutoKeepAlive(true);
       device.isAutoConfirm = true;
 
+      const unlatchDeviceId = `nuki-unlatch-${bridgeIp.replace(/\./g, '-')}-${config.id}`;
+      const unlatchDevice = await freeAtHome.createRawDevice(
+        unlatchDeviceId,
+        `${config.name} Türöffner`,
+        "SwitchingActuator"
+      );
+      unlatchDevice.setAutoKeepAlive(true);
+      unlatchDevice.isAutoConfirm = true;
+
       const managedLock: ManagedLock = {
         config,
         device,
+        unlatchDevice,
         isUpdating: false
       };
 
