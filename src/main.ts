@@ -9,7 +9,6 @@ const NUKI_BRIDGE_PORT = 8080;
 const STATUS_UPDATE_INTERVAL_MS = 30000;
 const STATUS_UPDATE_DELAY_AFTER_ACTION_MS = 2000;
 const STATUS_UPDATE_DELAY_AFTER_ERROR_MS = 1000;
-const BRIDGE_CONNECTION_CHECK_INTERVAL_MS = 60000;
 const BRIDGE_CONNECTION_TIMEOUT_MS = 5000;
 
 // Nuki Lock States
@@ -124,15 +123,11 @@ class NukiApiClient {
   }
 
   /**
-   * Prüft ob die Nuki Bridge erreichbar ist
+   * Gibt alle Schlösser der Bridge zurück
    */
-  async checkConnection(): Promise<boolean> {
-    try {
-      await this.httpGet(`/info?token=${this.apiToken}`, BRIDGE_CONNECTION_TIMEOUT_MS);
-      return true;
-    } catch {
-      return false;
-    }
+  async listAllLocks(): Promise<NukiBridgeLock[]> {
+    const response = await this.httpGet(`/list?token=${this.apiToken}`, BRIDGE_CONNECTION_TIMEOUT_MS);
+    return JSON.parse(response) as NukiBridgeLock[];
   }
 
   /**
@@ -140,9 +135,7 @@ class NukiApiClient {
    */
   async getLockStatus(lockId: string): Promise<NukiLockStatus | null> {
     try {
-      const response = await this.httpGet(`/list?token=${this.apiToken}`);
-      const locks: NukiBridgeLock[] = JSON.parse(response);
-
+      const locks = await this.listAllLocks();
       const lock = locks.find((l) => l.nukiId.toString() === lockId);
 
       if (!lock) {
@@ -212,8 +205,6 @@ class NukiApiClient {
 
 // Lock Manager - Verwaltet ein einzelnes Lock
 class LockManager {
-  private updateIntervalId?: NodeJS.Timeout;
-
   constructor(
     private config: NukiLockConfig,
     private device: FreeAtHomeRawChannel,
@@ -221,7 +212,6 @@ class LockManager {
     private managedLock: ManagedLock
   ) {
     this.setupEventHandlers();
-    this.startStatusUpdates();
   }
 
   /**
@@ -261,62 +251,47 @@ class LockManager {
   }
 
   /**
-   * Aktualisiert den Lock-Status von der Nuki API
+   * Wendet einen bereits abgerufenen Lock-Status auf das Gerät an
    */
-  async updateStatus(): Promise<void> {
-    if (this.managedLock.isUpdating) {
+  async applyStatus(lockStatus: NukiLockStatus | null): Promise<void> {
+    if (!lockStatus || this.managedLock.isUpdating) {
       return;
     }
 
+    this.managedLock.isUpdating = true;
     try {
-      const lockStatus = await this.apiClient.getLockStatus(this.config.id);
-
-      if (!lockStatus) {
-        return;
-      }
-
-      this.managedLock.isUpdating = true;
-
       const isLocked = lockStatus.state === NukiLockState.LOCKED;
       await this.device.setOutputDatapoint(
         PairingIds.AL_INFO_LOCK_UNLOCK_COMMAND,
         isLocked ? "1" : "0"
       );
 
-      const statusText = isLocked ? "VERRIEGELT" : "ENTRIEGELT";
       console.log(
         `[${this.config.name}] Status aktualisiert: ${lockStatus.stateName} ` +
-        `(State: ${lockStatus.state}) -> ${statusText}`
+        `(State: ${lockStatus.state}) -> ${isLocked ? "VERRIEGELT" : "ENTRIEGELT"}`
       );
-
+    } finally {
       this.managedLock.isUpdating = false;
+    }
+  }
+
+  /**
+   * Aktualisiert den Lock-Status von der Nuki API (für Post-Aktion-Abfragen)
+   */
+  async updateStatus(): Promise<void> {
+    try {
+      const lockStatus = await this.apiClient.getLockStatus(this.config.id);
+      await this.applyStatus(lockStatus);
     } catch (error) {
       console.error(`[${this.config.name}] Fehler beim Abfragen des Status:`, error);
-      this.managedLock.isUpdating = false;
     }
   }
 
   /**
-   * Startet regelmäßige Status-Updates
-   */
-  private startStatusUpdates(): void {
-    this.updateStatus();
-
-    this.updateIntervalId = setInterval(() => {
-      if (!this.managedLock.isUpdating) {
-        this.updateStatus();
-      }
-    }, STATUS_UPDATE_INTERVAL_MS);
-  }
-
-  /**
-   * Stoppt Status-Updates und bereinigt Ressourcen
+   * Bereinigt Ressourcen
    */
   dispose(): void {
-    if (this.updateIntervalId) {
-      clearInterval(this.updateIntervalId);
-      this.updateIntervalId = undefined;
-    }
+    // Kein eigener Interval mehr – Polling erfolgt auf Bridge-Ebene
   }
 }
 
@@ -403,7 +378,7 @@ class NukiAddonManager {
   }
 
   /**
-   * Erstellt eine neue Bridge und startet Connectivity-Monitoring
+   * Erstellt eine neue Bridge und startet den Poll-Zyklus
    */
   private async createBridge(bridgeConfig: NukiBridgeConfig): Promise<void> {
     const apiClient = new NukiApiClient(bridgeConfig.ip, bridgeConfig.token);
@@ -416,7 +391,7 @@ class NukiAddonManager {
     this.managedBridges.set(bridgeConfig.ip, managedBridge);
 
     await this.initializeLocks(bridgeConfig, apiClient);
-    this.startBridgeConnectivityMonitoring(managedBridge);
+    this.startBridgePoll(managedBridge);
 
     console.log(`Bridge ${bridgeConfig.ip} initialisiert`);
   }
@@ -443,21 +418,51 @@ class NukiAddonManager {
   }
 
   /**
-   * Prüft die Bridge-Verbindung und markiert Lock-Aktoren als unresponsive,
-   * wenn die Bridge nicht erreichbar ist.
+   * Ruft einmal /list ab und verteilt die Ergebnisse an alle Locks der Bridge.
+   * Schlägt der Aufruf fehl, werden alle Locks als unresponsive markiert.
    */
-  private async checkBridgeConnectivity(managedBridge: ManagedBridge): Promise<void> {
-    const isOnline = await managedBridge.apiClient.checkConnection();
+  private async pollBridge(managedBridge: ManagedBridge): Promise<void> {
     const bridgeIp = managedBridge.config.ip;
 
-    if (!isOnline) {
+    try {
+      const allLocks = await managedBridge.apiClient.listAllLocks();
+
+      for (const [lockKey, managedLock] of this.managedLocks.entries()) {
+        if (!lockKey.startsWith(`${bridgeIp}:`)) {
+          continue;
+        }
+
+        const manager = this.lockManagers.get(lockKey);
+        if (!manager) {
+          continue;
+        }
+
+        const bridgeLock = allLocks.find(l => l.nukiId.toString() === managedLock.config.id);
+        if (!bridgeLock?.lastKnownState) {
+          continue;
+        }
+
+        const lks = bridgeLock.lastKnownState;
+        const lockStatus: NukiLockStatus = {
+          nukiId: bridgeLock.nukiId,
+          name: bridgeLock.name || '',
+          batteryCritical: lks.batteryCritical === true,
+          state: lks.state as NukiLockState,
+          stateName: lks.stateName || 'unknown',
+          batteryChargeState: lks.batteryChargeState ?? 0,
+          success: true
+        };
+
+        await manager.applyStatus(lockStatus);
+      }
+    } catch (error) {
       console.warn(`Nuki Bridge ${bridgeIp} nicht erreichbar – Aktoren werden deaktiviert`);
       for (const [lockKey, managedLock] of this.managedLocks.entries()) {
         if (lockKey.startsWith(`${bridgeIp}:`)) {
           try {
             await managedLock.device.setUnresponsive();
-          } catch (error) {
-            console.error(`Fehler beim Deaktivieren von ${managedLock.config.name}:`, error);
+          } catch (err) {
+            console.error(`Fehler beim Deaktivieren von ${managedLock.config.name}:`, err);
           }
         }
       }
@@ -465,18 +470,18 @@ class NukiAddonManager {
   }
 
   /**
-   * Startet die regelmäßige Verbindungsüberwachung einer Bridge
+   * Startet den regelmäßigen Poll-Zyklus für eine Bridge
    */
-  private startBridgeConnectivityMonitoring(managedBridge: ManagedBridge): void {
+  private startBridgePoll(managedBridge: ManagedBridge): void {
     if (managedBridge.statusIntervalId) {
       clearInterval(managedBridge.statusIntervalId);
     }
 
-    this.checkBridgeConnectivity(managedBridge);
+    this.pollBridge(managedBridge);
 
     managedBridge.statusIntervalId = setInterval(
-      () => this.checkBridgeConnectivity(managedBridge),
-      BRIDGE_CONNECTION_CHECK_INTERVAL_MS
+      () => this.pollBridge(managedBridge),
+      STATUS_UPDATE_INTERVAL_MS
     );
   }
 
