@@ -13,24 +13,10 @@
       "name": "Settings",
       "items": {
         "nukiBridges": {
-          "name": "Nuki Bridges (Multi-Bridge)",
+          "name": "Nuki Bridges",
           "type": "string",
-          "description": "JSON-Array mit allen Bridges und deren Schlössern. Format: [{\"ip\":\"192.168.1.100\",\"token\":\"abc123\",\"locks\":[{\"id\":\"111\",\"name\":\"Haustür\"}]},{\"ip\":\"192.168.1.101\",\"token\":\"def456\",\"locks\":[{\"id\":\"222\",\"name\":\"Büro\"}]}]"
-        },
-        "nukiBridgeIp": {
-          "name": "Nuki Bridge IP (Legacy)",
-          "type": "string",
-          "description": "IP-Adresse einer einzelnen Nuki Bridge (nur wenn nukiBridges nicht gesetzt). Z.B. 192.168.1.100"
-        },
-        "nukiApiToken": {
-          "name": "Nuki API Token (Legacy)",
-          "type": "string",
-          "description": "API Token der einzelnen Nuki Bridge (nur wenn nukiBridges nicht gesetzt)"
-        },
-        "nukiLocks": {
-          "name": "Nuki Locks (Legacy)",
-          "type": "string",
-          "description": "JSON-Array der Schlösser für die einzelne Bridge (nur wenn nukiBridges nicht gesetzt). Format: [{\"id\":\"123\",\"name\":\"Haustür\"}]"
+          "description": "JSON-Array mit allen Bridges und deren Schlössern. Format: [{\"ip\":\"192.168.1.100\",\"token\":\"abc123\",\"locks\":[{\"id\":\"111\",\"name\":\"Haustür\"}]},{\"ip\":\"192.168.1.101\",\"token\":\"def456\",\"locks\":[{\"id\":\"222\",\"name\":\"Büro\"}]}]",
+          "required": true
         }
       }
     }
