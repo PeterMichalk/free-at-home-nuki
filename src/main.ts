@@ -1,5 +1,7 @@
 import { FreeAtHome, AddOn, PairingIds, FreeAtHomeRawChannel } from '@busch-jaeger/free-at-home';
 import * as http from 'http';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const freeAtHome = new FreeAtHome();
 freeAtHome.activateSignalHandling();
@@ -88,6 +90,78 @@ interface NukiBridgeLock {
 
 interface AddOnConfiguration {
   nukiBridges?: string;
+}
+
+// Zugriffsprotokoll (Activity Log)
+interface ActivityLogEntry {
+  timestamp: string;
+  lockId: string;
+  lockName: string;
+  bridgeIp: string;
+  action: 'LOCK' | 'UNLOCK';
+  success: boolean;
+  error?: string;
+}
+
+const ACTIVITY_LOG_MAX_ENTRIES = 500;
+const ACTIVITY_LOG_FILE = '/data/nuki-activity-log.json';
+
+class ActivityLog {
+  private entries: ActivityLogEntry[] = [];
+  private filePath: string;
+
+  constructor() {
+    this.filePath = fs.existsSync(path.dirname(ACTIVITY_LOG_FILE))
+      ? ACTIVITY_LOG_FILE
+      : path.join(process.cwd(), 'nuki-activity-log.json');
+    this.loadFromFile();
+  }
+
+  private loadFromFile(): void {
+    try {
+      if (fs.existsSync(this.filePath)) {
+        const data = fs.readFileSync(this.filePath, 'utf-8');
+        this.entries = JSON.parse(data);
+      }
+    } catch (error) {
+      console.warn('Zugriffsprotokoll konnte nicht geladen werden:', error);
+      this.entries = [];
+    }
+  }
+
+  private saveToFile(): void {
+    try {
+      fs.writeFileSync(this.filePath, JSON.stringify(this.entries, null, 2), 'utf-8');
+    } catch (error) {
+      console.warn('Zugriffsprotokoll konnte nicht gespeichert werden:', error);
+    }
+  }
+
+  addEntry(entry: Omit<ActivityLogEntry, 'timestamp'>): void {
+    const fullEntry: ActivityLogEntry = {
+      timestamp: new Date().toISOString(),
+      ...entry
+    };
+
+    this.entries.push(fullEntry);
+
+    if (this.entries.length > ACTIVITY_LOG_MAX_ENTRIES) {
+      this.entries = this.entries.slice(-ACTIVITY_LOG_MAX_ENTRIES);
+    }
+
+    this.saveToFile();
+
+    const status = entry.success ? 'erfolgreich' : 'fehlgeschlagen';
+    const actionName = entry.action === 'LOCK' ? 'VERRIEGELN' : 'ENTRIEGELN';
+    console.log(
+      `[Zugriffsprotokoll] ${fullEntry.timestamp} | ${entry.lockName} (${entry.lockId}) | ` +
+      `${actionName} ${status}${entry.error ? ` | Fehler: ${entry.error}` : ''}`
+    );
+  }
+
+  getEntries(): ActivityLogEntry[] {
+    return [...this.entries];
+  }
 }
 
 // Nuki API Client
@@ -220,7 +294,9 @@ class LockManager {
     private config: NukiLockConfig,
     private device: FreeAtHomeRawChannel,
     private apiClient: NukiApiClient,
-    private managedLock: ManagedLock
+    private managedLock: ManagedLock,
+    private bridgeIp: string,
+    private activityLog: ActivityLog
   ) {
     this.setupEventHandlers();
     this.startStatusUpdates();
@@ -246,6 +322,7 @@ class LockManager {
    */
   private async handleLockCommand(shouldLock: boolean): Promise<void> {
     const action = shouldLock ? "VERRIEGELN" : "ENTRIEGELN";
+    const logAction: 'LOCK' | 'UNLOCK' = shouldLock ? 'LOCK' : 'UNLOCK';
     console.log(`[${this.config.name}] Lock Command: ${action}`);
 
     try {
@@ -255,8 +332,26 @@ class LockManager {
         await this.apiClient.unlock(this.config.id);
       }
 
+      this.activityLog.addEntry({
+        lockId: this.config.id,
+        lockName: this.config.name,
+        bridgeIp: this.bridgeIp,
+        action: logAction,
+        success: true
+      });
+
       setTimeout(() => this.updateStatus(), STATUS_UPDATE_DELAY_AFTER_ACTION_MS);
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.activityLog.addEntry({
+        lockId: this.config.id,
+        lockName: this.config.name,
+        bridgeIp: this.bridgeIp,
+        action: logAction,
+        success: false,
+        error: errorMessage
+      });
+
       console.error(`[${this.config.name}] Fehler beim ${action}:`, error);
       setTimeout(() => this.updateStatus(), STATUS_UPDATE_DELAY_AFTER_ERROR_MS);
     }
@@ -359,6 +454,7 @@ class NukiAddonManager {
   private managedBridges: Map<string, ManagedBridge> = new Map();
   private managedLocks: Map<string, ManagedLock> = new Map();
   private lockManagers: Map<string, LockManager> = new Map();
+  private activityLog: ActivityLog = new ActivityLog();
 
   constructor(private addOn: AddOn.AddOn) {
     this.setupConfigurationHandler();
@@ -555,7 +651,7 @@ class NukiAddonManager {
       };
 
       const lockKey = `${bridgeIp}:${config.id}`;
-      const manager = new LockManager(config, device, apiClient, managedLock);
+      const manager = new LockManager(config, device, apiClient, managedLock, bridgeIp, this.activityLog);
 
       this.managedLocks.set(lockKey, managedLock);
       this.lockManagers.set(lockKey, manager);
