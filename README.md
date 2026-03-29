@@ -1,18 +1,21 @@
 # free@home Nuki Addon
 
-Ein free@home Addon zur Integration von Nuki Smart Locks in das Busch-Jäger/ABB free@home System. Dieses Addon ermöglicht es, mehrere Nuki-Schlösser über die free@home Zentrale zu steuern und deren Status zu überwachen.
+Ein free@home Addon zur Integration von Nuki Smart Locks in das Busch-Jäger free@home System. Dieses Addon ermöglicht es, mehrere Nuki-Schlösser über mehrere Nuki Bridges hinweg in der free@home Zentrale zu steuern und deren Status zu überwachen.
 
 ## Features
 
-- 🔐 **Mehrere Nuki-Schlösser unterstützen** - Verwalte mehrere Schlösser gleichzeitig
-- 🔄 **Automatische Status-Synchronisation** - Status wird alle 30 Sekunden aktualisiert
-- 🎛️ **Vollständige Steuerung** - Verriegeln und Entriegeln direkt aus free@home
-- 📊 **Echtzeit-Status** - Aktueller Zustand jedes Schlosses wird angezeigt
-- 🏠 **Native Integration** - Verwendet den `simple_doorlock` Gerätetyp für optimale Integration
+- **Multi-Bridge-Support** - Mehrere Nuki Bridges gleichzeitig verwalten
+- **Mehrere Nuki-Schlösser** - Pro Bridge beliebig viele Schlösser konfigurieren
+- **Automatische Status-Synchronisation** - Status wird regelmäßig aktualisiert (Standard: alle 30 Sekunden)
+- **Konfigurierbares Poll-Intervall** - Poll-Intervall pro Bridge individuell einstellbar
+- **Konfigurierbarer Port** - Bridge-Port optional anpassbar (Standard: 8080)
+- **Vollständige Steuerung** - Verriegeln und Entriegeln direkt aus free@home
+- **Offline-Erkennung** - Geräte werden als "nicht erreichbar" markiert, wenn die Bridge offline ist
+- **Native Integration** - Verwendet den `simple_doorlock` Gerätetyp für optimale Integration
 
 ## Voraussetzungen
 
-- ABB free@home System Access Point (SysAP)
+- Busch-Jäger free@home System Access Point (SysAP)
 - Nuki Smart Lock mit Nuki Bridge
 - Node.js 18.x (für Entwicklung)
 - Nuki Bridge API Token
@@ -39,33 +42,80 @@ Ein free@home Addon zur Integration von Nuki Smart Locks in das Busch-Jäger/ABB
 
 ## Konfiguration
 
-### Konfiguration in free@home
+### Konfigurationsparameter
 
-Nach der Installation musst du das Addon in den free@home Einstellungen konfigurieren:
+Nach der Installation musst du das Addon in den free@home Einstellungen konfigurieren. Es gibt einen einzigen Parameter:
 
-1. **Nuki Bridge IP**: Die IP-Adresse deiner Nuki Bridge im lokalen Netzwerk
-   - Beispiel: `192.168.1.100`
+**Nuki Bridges** (`nukiBridges`): Ein JSON-Array mit allen Bridges und deren Schlössern.
 
-2. **Nuki API Token**: Der API Token deiner Nuki Bridge
-   - Beispiel: `abc123def456...`
+#### Minimales Beispiel (eine Bridge)
 
-3. **Nuki Locks**: JSON-Array mit den zu verwaltenden Schlössern
-   ```json
-   [
-     {
-       "id": "594541916",
-       "name": "Haustür"
-     },
-     {
-       "id": "123456789",
-       "name": "Garage"
-     }
-   ]
-   ```
+```json
+[
+  {
+    "ip": "192.168.1.100",
+    "token": "abc123def456",
+    "locks": [
+      {
+        "id": "594541916",
+        "name": "Haustür"
+      }
+    ]
+  }
+]
+```
+
+#### Erweitertes Beispiel (mehrere Bridges, optionale Parameter)
+
+```json
+[
+  {
+    "ip": "192.168.1.100",
+    "port": 8080,
+    "token": "abc123def456",
+    "pollInterval": 15000,
+    "locks": [
+      {
+        "id": "594541916",
+        "name": "Haustür"
+      },
+      {
+        "id": "123456789",
+        "name": "Garage"
+      }
+    ]
+  },
+  {
+    "ip": "192.168.1.101",
+    "token": "def456ghi789",
+    "locks": [
+      {
+        "id": "987654321",
+        "name": "Büro"
+      }
+    ]
+  }
+]
+```
+
+#### Parameter pro Bridge
+
+| Parameter | Pflicht | Standard | Beschreibung |
+|-----------|---------|---------|--------------|
+| `ip` | Ja | – | IP-Adresse der Nuki Bridge im lokalen Netzwerk |
+| `token` | Ja | – | API Token der Nuki Bridge |
+| `locks` | Ja | – | Array der zu verwaltenden Schlösser (siehe unten) |
+| `port` | Nein | `8080` | HTTP-Port der Bridge API |
+| `pollInterval` | Nein | `30000` | Status-Abfrageintervall in Millisekunden |
+
+#### Parameter pro Schloss (`locks`)
+
+| Parameter | Pflicht | Beschreibung |
+|-----------|---------|--------------|
+| `id` | Ja | Nuki Lock ID (numerisch als String) |
+| `name` | Ja | Anzeigename in free@home |
 
 ### Nuki Lock ID finden
-
-Die Lock ID findest du auf verschiedene Weise:
 
 1. **Über die Nuki Bridge API**:
    ```bash
@@ -87,20 +137,27 @@ Nach der Konfiguration erscheint jedes konfigurierte Schloss als separates Gerä
 
 ### Status-Synchronisation
 
-- Der Status jedes Schlosses wird automatisch alle 30 Sekunden aktualisiert
-- Änderungen am Schloss werden sofort in free@home angezeigt
+- Der Status aller Schlösser einer Bridge wird mit einem einzigen API-Aufruf pro Poll-Zyklus abgefragt
+- Änderungen am Schloss werden beim nächsten Poll in free@home angezeigt
 - Manuelle Steuerung über free@home wird sofort an das Nuki Schloss weitergegeben
+- Nach einer Aktion wird der Status nach 2 Sekunden automatisch nachgefragt
+
+### Offline-Verhalten
+
+Ist eine Nuki Bridge nicht erreichbar, werden alle zugehörigen Geräte in free@home als "nicht erreichbar" (`unresponsive`) markiert. Sobald die Bridge wieder online ist, wird der Status beim nächsten Poll automatisch wiederhergestellt.
 
 ### Lock-Zustände
 
 Das Addon unterstützt folgende Nuki Lock-Zustände:
 
-- **State 1**: Verriegelt (Locked)
-- **State 2**: Entriegelt (Unlocked)
-- **State 3**: Entriegelt (Unlocked - Lock 'n' Go)
-- **State 4**: Entriegeln (Unlatching)
-- **State 5**: Verriegelt (Locked - Lock 'n' Go)
-- **State 6**: Entriegeln (Unlocking)
+| State | Nuki Status | free@home Anzeige |
+|-------|-------------|-------------------|
+| 1 | Locked | Verriegelt |
+| 2 | Unlocked | Entriegelt |
+| 3 | Unlocked (Lock 'n' Go) | Entriegelt |
+| 4 | Unlatching | Entriegelt |
+| 5 | Locked (Lock 'n' Go) | Verriegelt |
+| 6 | Unlocking | Entriegelt |
 
 ## Entwicklung
 
@@ -157,7 +214,7 @@ npm run monitorconfig  # Konfiguration überwachen
 
 Das Addon nutzt die Nuki Bridge Local API:
 
-- **GET** `/list?token=<TOKEN>` - Liste aller Schlösser abrufen
+- **GET** `/list?token=<TOKEN>` - Liste aller Schlösser abrufen (wird einmal pro Poll-Zyklus für alle Schlösser einer Bridge genutzt)
 - **GET** `/lockAction?token=<TOKEN>&nukiId=<ID>&action=<ACTION>` - Schloss steuern
   - `action=2`: Verriegeln
   - `action=3`: Entriegeln
@@ -172,16 +229,24 @@ Weitere Informationen: [Nuki Bridge API Dokumentation](https://developer.nuki.io
 - Stelle sicher, dass die Nuki Bridge erreichbar ist
 - Prüfe die Logs mit `npm run journal`
 
+### Gerät wird als "nicht erreichbar" angezeigt
+
+- Die Nuki Bridge ist nicht erreichbar oder offline
+- Überprüfe IP-Adresse, Port und API Token in der Konfiguration
+- Stelle sicher, dass die Bridge im selben Netzwerk ist und kein Firewall-Problem besteht
+- Nach Wiederherstellung der Bridge-Verbindung normalisiert sich der Status automatisch
+
 ### Status wird nicht aktualisiert
 
 - Überprüfe die Bridge IP und den API Token
-- Stelle sicher, dass die Bridge im selben Netzwerk ist
 - Prüfe die Firewall-Einstellungen
+- Überprüfe das konfigurierte `pollInterval` (Standard: 30000 ms)
 
 ### Addon startet nicht
 
 - Validiere die Metadaten: `npm run validate`
 - Prüfe die Logs auf Fehlermeldungen
+- Stelle sicher, dass die JSON-Konfiguration in `nukiBridges` syntaktisch korrekt ist
 - Stelle sicher, dass alle Abhängigkeiten installiert sind
 
 ## Lizenz
