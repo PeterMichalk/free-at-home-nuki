@@ -1,6 +1,6 @@
 {
   "name": "free-at-home-nuki",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "free@home Addon zur Integration von Nuki Smart Locks",
   "main": "build/main.js",
   "scripts": {
@@ -15,7 +15,9 @@
     "journal": "free-at-home-cli journal --filterAddon",
     "monitorstate": "free-at-home-cli addonapplicationstate --clear",
     "monitorconfig": "free-at-home-cli addonconfiguration --clear",
-    "clean": "rm -rf build"
+    "clean": "rm -rf build",
+    "test": "jest",
+    "test:coverage": "jest --coverage"
   },
   "keywords": [
     "free-at-home",
@@ -44,7 +46,11 @@
   "devDependencies": {
     "@busch-jaeger/free-at-home-cli": "^0.9.1",
     "@tsconfig/node18": "^18.2.2",
+    "@types/jest": "^29.5.14",
     "@types/node": "^18.15.3",
-    "typescript": "^5.2.2"
+    "jest": "^29.7.0",
+    "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.2",
+    "typescript": "5.3"
   }
 }

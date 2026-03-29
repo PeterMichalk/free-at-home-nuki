@@ -9,5 +9,7 @@
     "rootDir": "src", /* Specify the root directory of input files. Use to control the output directory structure with --outDir. */
     "strict": true, /* Enable all strict type-checking options. */
     "resolveJsonModule": true /* Include modules imported with '.json' extension */
-  }
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "build", "src/__tests__"]
 }
