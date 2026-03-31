@@ -6,6 +6,7 @@ import {
   NukiLockState,
   NukiLockStatus,
   NukiBridgeLock,
+  NukiBridgeLogEntry,
   NukiApiResponse
 } from './types';
 
@@ -123,5 +124,23 @@ export class NukiApiClient {
    */
   async unlock(lockId: string): Promise<boolean> {
     return this.executeLockAction(lockId, NukiLockAction.UNLOCK);
+  }
+
+  /**
+   * Ruft das Ereignisprotokoll der Nuki Bridge ab.
+   * Erfordert Bridge-Firmware >= 1.22 – bei älteren Versionen wird ein
+   * leeres Array zurückgegeben ohne das Addon zu unterbrechen.
+   */
+  async getLog(count = 50): Promise<NukiBridgeLogEntry[]> {
+    try {
+      const response = await this.httpGet(
+        `/log?token=${this.apiToken}&count=${count}`,
+        BRIDGE_CONNECTION_TIMEOUT_MS
+      );
+      return JSON.parse(response) as NukiBridgeLogEntry[];
+    } catch (error) {
+      console.warn(`Bridge-Log nicht verfügbar (ältere Firmware?): ${error}`);
+      return [];
+    }
   }
 }
