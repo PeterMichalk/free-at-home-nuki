@@ -25,6 +25,49 @@ export enum NukiLockAction {
   UNLOCK = 3
 }
 
+// Trigger-Quellen aus Nuki Bridge API /log
+export enum NukiLogTrigger {
+  SYSTEM    = 0,  // System/Timeout
+  MANUAL    = 1,  // Physischer Schlüssel/Drehknauf
+  BUTTON    = 2,  // Nuki Keypad / Fingerabdruckleser
+  AUTOMATIC = 3,  // Zeitplan
+  TIMED     = 4,  // Zeitgesteuert
+  APP       = 5,  // Nuki App
+  AUTO_LOCK = 6,  // Auto-Lock
+}
+
+// Aktions-Codes aus Nuki Bridge API /log
+export enum NukiLogAction {
+  UNLOCK            = 1,
+  LOCK              = 2,
+  UNLATCH           = 3,
+  LOCK_N_GO         = 4,
+  LOCK_N_GO_UNLATCH = 5,
+}
+
+// Roheintrag aus /log-Endpunkt der Nuki Bridge
+export interface NukiBridgeLogEntry {
+  nukiId:     number;
+  deviceType: number;
+  name:       string;
+  action:     number;   // NukiLogAction
+  trigger:    number;   // NukiLogTrigger
+  state:      number;   // NukiLockState
+  success:    boolean;
+  date:       string;   // ISO 8601
+}
+
+// Normalisierter Eintrag im Zugriffsprotokoll
+export interface ActivityLogEntry {
+  timestamp: Date;
+  lockId:    string;
+  lockName:  string;
+  action:    string;
+  source:    string;
+  state:     NukiLockState;
+  success:   boolean;
+}
+
 // Interfaces
 export interface NukiLockStatus {
   nukiId: number;
@@ -53,6 +96,7 @@ export interface ManagedLock {
   config: NukiLockConfig;
   device: FreeAtHomeRawChannel;
   isUpdating: boolean;
+  previousState?: NukiLockState;
 }
 
 export interface ManagedBridge {

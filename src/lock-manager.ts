@@ -1,5 +1,6 @@
 import { PairingIds, FreeAtHomeRawChannel } from '@busch-jaeger/free-at-home';
 import { NukiApiClient } from './nuki-api-client';
+import { ActivityLog } from './activity-log';
 import {
   STATUS_UPDATE_DELAY_AFTER_ACTION_MS,
   STATUS_UPDATE_DELAY_AFTER_ERROR_MS,
@@ -15,7 +16,8 @@ export class LockManager {
     private config: NukiLockConfig,
     private device: FreeAtHomeRawChannel,
     private apiClient: NukiApiClient,
-    private managedLock: ManagedLock
+    private managedLock: ManagedLock,
+    private activityLog?: ActivityLog
   ) {
     this.setupEventHandlers();
   }
@@ -42,6 +44,20 @@ export class LockManager {
     const action = shouldLock ? "VERRIEGELN" : "ENTRIEGELN";
     console.log(`[${this.config.name}] Lock Command: ${action}`);
 
+    // Aktion im Zugriffsprotokoll vormerken (Quelle: free@home)
+    const commandTime = new Date();
+    this.activityLog?.addEntry({
+      timestamp: commandTime,
+      lockId:    this.config.id,
+      lockName:  this.config.name,
+      action:    shouldLock ? 'VERRIEGELT' : 'ENTRIEGELT',
+      source:    'free@home',
+      state:     shouldLock ? NukiLockState.LOCKED : NukiLockState.UNLOCKED,
+      success:   true,
+    });
+    // Damit der Bridge-Log denselben Zeitstempel nicht nochmals einträgt
+    this.activityLog?.markLockSeen(this.config.id, commandTime);
+
     try {
       if (shouldLock) {
         await this.apiClient.lock(this.config.id);
@@ -57,7 +73,8 @@ export class LockManager {
   }
 
   /**
-   * Wendet einen bereits abgerufenen Lock-Status auf das Gerät an
+   * Wendet einen bereits abgerufenen Lock-Status auf das Gerät an.
+   * Erkennt Statuswechsel und trägt externe Änderungen ins Protokoll ein.
    */
   async applyStatus(lockStatus: NukiLockStatus | null): Promise<void> {
     if (!lockStatus || this.managedLock.isUpdating) {
@@ -66,7 +83,29 @@ export class LockManager {
 
     this.managedLock.isUpdating = true;
     try {
-      const isLocked = lockStatus.state === NukiLockState.LOCKED;
+      const isLocked = lockStatus.state === NukiLockState.LOCKED
+        || lockStatus.state === NukiLockState.LOCKED_N_GO;
+
+      // Statuswechsel erkennen – nur wenn previousState bereits bekannt ist
+      // und die Änderung nicht durch free@home ausgelöst wurde (diese werden
+      // bereits in handleLockCommand protokolliert)
+      if (
+        this.managedLock.previousState !== undefined &&
+        this.managedLock.previousState !== lockStatus.state
+      ) {
+        this.activityLog?.addEntry({
+          timestamp: new Date(),
+          lockId:    this.config.id,
+          lockName:  this.config.name,
+          action:    isLocked ? 'VERRIEGELT' : 'ENTRIEGELT',
+          source:    'Extern (Polling erkannt)',
+          state:     lockStatus.state,
+          success:   true,
+        });
+      }
+
+      this.managedLock.previousState = lockStatus.state;
+
       await this.device.setOutputDatapoint(
         PairingIds.AL_INFO_LOCK_UNLOCK_COMMAND,
         isLocked ? "1" : "0"

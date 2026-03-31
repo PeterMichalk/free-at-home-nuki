@@ -1,6 +1,7 @@
 import { FreeAtHome, AddOn } from '@busch-jaeger/free-at-home';
 import { NukiApiClient } from './nuki-api-client';
 import { LockManager } from './lock-manager';
+import { ActivityLog } from './activity-log';
 import { ConfigurationParser } from './configuration-parser';
 import {
   NUKI_BRIDGE_PORT,
@@ -18,6 +19,7 @@ export class NukiAddonManager {
   private managedBridges: Map<string, ManagedBridge> = new Map();
   private managedLocks: Map<string, ManagedLock> = new Map();
   private lockManagers: Map<string, LockManager> = new Map();
+  private readonly activityLog = new ActivityLog();
 
   constructor(private addOn: AddOn.AddOn, private freeAtHome: FreeAtHome) {
     this.setupConfigurationHandler();
@@ -141,6 +143,16 @@ export class NukiAddonManager {
 
         await manager.applyStatus(lockStatus);
       }
+
+      // Zugriffsprotokoll abrufen – separater try/catch, damit ein Fehler hier
+      // nicht die Bridge fälschlicherweise als offline markiert (ältere Firmware)
+      try {
+        const bridgeLogs = await managedBridge.apiClient.getLog(50);
+        this.activityLog.mergeBridgeLog(bridgeLogs);
+      } catch {
+        // getLog() liefert bereits intern eine Warnung; hier nichts weiter tun
+      }
+
     } catch (error) {
       console.warn(`Nuki Bridge ${bridgeIp} nicht erreichbar – Aktoren werden deaktiviert`);
       for (const [lockKey, managedLock] of this.managedLocks.entries()) {
@@ -223,7 +235,7 @@ export class NukiAddonManager {
       };
 
       const lockKey = `${bridgeIp}:${config.id}`;
-      const manager = new LockManager(config, device, apiClient, managedLock);
+      const manager = new LockManager(config, device, apiClient, managedLock, this.activityLog);
 
       this.managedLocks.set(lockKey, managedLock);
       this.lockManagers.set(lockKey, manager);

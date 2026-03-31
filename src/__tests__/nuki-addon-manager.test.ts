@@ -29,7 +29,7 @@ describe('NukiAddonManager', () => {
   // Use plain object to avoid strict-event-emitter-types conflicts
   let mockDevice: any;
   let mockFreeAtHome: jest.Mocked<Pick<FreeAtHome, 'createRawDevice'>>;
-  let mockApiClientInstance: jest.Mocked<Pick<NukiApiClient, 'listAllLocks' | 'getLockStatus' | 'lock' | 'unlock'>>;
+  let mockApiClientInstance: jest.Mocked<Pick<NukiApiClient, 'listAllLocks' | 'getLockStatus' | 'lock' | 'unlock' | 'getLog'>>;
   let configurationChangedListener: (config: AddOn.Configuration) => Promise<void>;
 
   beforeEach(() => {
@@ -53,6 +53,7 @@ describe('NukiAddonManager', () => {
       getLockStatus: jest.fn().mockResolvedValue(null),
       lock: jest.fn().mockResolvedValue(true),
       unlock: jest.fn().mockResolvedValue(true),
+      getLog: jest.fn().mockResolvedValue([]),
     };
     MockedNukiApiClient.mockImplementation(() => mockApiClientInstance as unknown as NukiApiClient);
 
@@ -243,6 +244,29 @@ describe('NukiAddonManager', () => {
         configurationChangedListener(makeConfiguration([makeBridgeConfig()]))
       ).resolves.toBeUndefined();
       await Promise.resolve();
+    });
+
+    it('ruft getLog() nach erfolgreichem listAllLocks-Aufruf auf', async () => {
+      mockApiClientInstance.listAllLocks.mockResolvedValue([nukiBridgeLock]);
+      await configurationChangedListener(makeConfiguration([makeBridgeConfig()]));
+      await Promise.resolve();
+      expect(mockApiClientInstance.getLog).toHaveBeenCalled();
+    });
+
+    it('ruft getLog() nicht auf wenn listAllLocks fehlschlägt', async () => {
+      mockApiClientInstance.listAllLocks.mockRejectedValue(new Error('Bridge offline'));
+      await configurationChangedListener(makeConfiguration([makeBridgeConfig()]));
+      await Promise.resolve();
+      expect(mockApiClientInstance.getLog).not.toHaveBeenCalled();
+    });
+
+    it('markiert Locks nicht als unresponsive wenn nur getLog() fehlschlägt', async () => {
+      mockApiClientInstance.listAllLocks.mockResolvedValue([]);
+      mockApiClientInstance.getLog.mockRejectedValue(new Error('Ältere Firmware'));
+      await configurationChangedListener(makeConfiguration([makeBridgeConfig()]));
+      await Promise.resolve();
+      // setUnresponsive darf NICHT aufgerufen werden – getLog-Fehler != Bridge offline
+      expect(mockDevice.setUnresponsive).not.toHaveBeenCalled();
     });
   });
 
