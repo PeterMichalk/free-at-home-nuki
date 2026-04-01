@@ -91,18 +91,18 @@ describe('LockManager', () => {
   });
 
   describe('handleLockCommand() – via datapointChanged', () => {
-    it('ruft apiClient.lock() auf wenn value "1" ist', async () => {
-      await datapointChangedListener(PairingIds.AL_LOCK_UNLOCK_COMMAND, '1');
+    it('ruft apiClient.lock() auf wenn value "0" ist', async () => {
+      await datapointChangedListener(PairingIds.AL_LOCK_UNLOCK_COMMAND, '0');
       expect(mockClient.lock).toHaveBeenCalledWith('42');
     });
 
-    it('ruft apiClient.unlock() auf wenn value "0" ist', async () => {
-      await datapointChangedListener(PairingIds.AL_LOCK_UNLOCK_COMMAND, '0');
+    it('ruft apiClient.unlock() auf wenn value "1" ist', async () => {
+      await datapointChangedListener(PairingIds.AL_LOCK_UNLOCK_COMMAND, '1');
       expect(mockClient.unlock).toHaveBeenCalledWith('42');
     });
 
     it('plant updateStatus nach ACTION_DELAY per setTimeout bei Erfolg', async () => {
-      await datapointChangedListener(PairingIds.AL_LOCK_UNLOCK_COMMAND, '1');
+      await datapointChangedListener(PairingIds.AL_LOCK_UNLOCK_COMMAND, '0');
       expect(mockClient.getLockStatus).not.toHaveBeenCalled();
       jest.runAllTimers();
       await Promise.resolve(); // flush microtasks
@@ -111,7 +111,7 @@ describe('LockManager', () => {
 
     it('plant updateStatus nach ERROR_DELAY per setTimeout wenn lock() fehlschlägt', async () => {
       mockClient.lock.mockRejectedValue(new Error('Bridge nicht erreichbar'));
-      await datapointChangedListener(PairingIds.AL_LOCK_UNLOCK_COMMAND, '1');
+      await datapointChangedListener(PairingIds.AL_LOCK_UNLOCK_COMMAND, '0');
       jest.runAllTimers();
       await Promise.resolve();
       expect(mockClient.getLockStatus).toHaveBeenCalledWith('42');

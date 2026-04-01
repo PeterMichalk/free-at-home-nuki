@@ -1,6 +1,6 @@
 {
   "name": "Nuki Smart Lock (local API) Integration",
-  "version": "1.2.1",
+  "version": "1.2.3",
   "id": "tech.michalk.freeathome.nuki",
   "license": "MIT",
   "description": "Integration von Nuki Smart Locks in das Busch-Jäger free@home System. Unterstützt mehrere Bridges und Schlösser mit automatischer Status-Synchronisation.",
