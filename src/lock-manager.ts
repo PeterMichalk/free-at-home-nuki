@@ -108,7 +108,7 @@ export class LockManager {
 
       await this.device.setOutputDatapoint(
         PairingIds.AL_INFO_LOCK_UNLOCK_COMMAND,
-        isLocked ? "1" : "0"
+        isLocked ? "0" : "1"
       );
 
       console.log(

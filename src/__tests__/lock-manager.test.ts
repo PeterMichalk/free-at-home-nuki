@@ -130,19 +130,19 @@ describe('LockManager', () => {
       expect(mockDevice.setOutputDatapoint).not.toHaveBeenCalled();
     });
 
-    it('setzt Datapoint auf "1" wenn state LOCKED ist', async () => {
+    it('setzt Datapoint auf "0" wenn state LOCKED ist', async () => {
       await manager.applyStatus(makeStatus(NukiLockState.LOCKED));
       expect(mockDevice.setOutputDatapoint).toHaveBeenCalledWith(
         PairingIds.AL_INFO_LOCK_UNLOCK_COMMAND,
-        '1'
+        '0'
       );
     });
 
-    it('setzt Datapoint auf "0" wenn state UNLOCKED ist', async () => {
+    it('setzt Datapoint auf "1" wenn state UNLOCKED ist', async () => {
       await manager.applyStatus(makeStatus(NukiLockState.UNLOCKED));
       expect(mockDevice.setOutputDatapoint).toHaveBeenCalledWith(
         PairingIds.AL_INFO_LOCK_UNLOCK_COMMAND,
-        '0'
+        '1'
       );
     });
 

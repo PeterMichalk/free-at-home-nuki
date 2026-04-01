@@ -1,6 +1,6 @@
 {
   "name": "free-at-home-nuki",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "free@home Addon zur Integration von Nuki Smart Locks",
   "main": "build/main.js",
   "scripts": {
