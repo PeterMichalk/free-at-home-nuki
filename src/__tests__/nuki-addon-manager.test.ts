@@ -17,10 +17,23 @@ function makeBridgeConfig(overrides: Partial<NukiBridgeConfig> = {}): NukiBridge
 }
 
 function makeConfiguration(bridges: NukiBridgeConfig[]): AddOn.Configuration {
+  const bridgeItems: Record<string, any> = {};
+  const lockItems: Record<string, any> = {};
+  let lockIndex = 0;
+  bridges.forEach((bridge, index) => {
+    bridgeItems[`bridge-${index}`] = {
+      ip: bridge.ip,
+      token: bridge.token,
+      port: bridge.port,
+      pollInterval: bridge.pollInterval,
+    };
+    bridge.locks.forEach(lock => {
+      lockItems[`lock-${lockIndex++}`] = { id: lock.id, name: lock.name, bridgeIp: bridge.ip };
+    });
+  });
   return {
-    default: {
-      items: { nukiBridges: JSON.stringify(bridges) } as any,
-    },
+    bridge: { items: bridgeItems },
+    lock:   { items: lockItems },
   } as unknown as AddOn.Configuration;
 }
 

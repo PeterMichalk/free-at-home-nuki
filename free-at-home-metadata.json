@@ -9,13 +9,53 @@
   "type": "app",
   "entryPoint": "build/main.js",
   "parameters": {
-    "default": {
-      "name": "Settings",
+    "bridge": {
+      "name": "Nuki Bridge",
+      "multiple": true,
       "items": {
-        "nukiBridges": {
-          "name": "Nuki Bridges",
+        "ip": {
+          "name": "IP-Adresse",
+          "type": "ipv4",
+          "required": true
+        },
+        "token": {
+          "name": "API Token",
+          "type": "password",
+          "required": true
+        },
+        "port": {
+          "name": "Port",
+          "type": "number",
+          "default": 8080,
+          "min": 1,
+          "max": 65535
+        },
+        "pollInterval": {
+          "name": "Poll-Intervall (ms)",
+          "type": "number",
+          "default": 30000,
+          "min": 1000,
+          "max": 60000
+        }
+      }
+    },
+    "lock": {
+      "name": "Nuki Schloss",
+      "multiple": true,
+      "items": {
+        "id": {
+          "name": "Lock ID",
           "type": "string",
-          "description": "JSON-Array mit allen Bridges und deren Schlössern. Format: [{\"ip\":\"192.168.1.100\",\"port\":8080,\"token\":\"abc123\",\"pollInterval\":30000,\"locks\":[{\"id\":\"111\",\"name\":\"Haustür\"}]},{\"ip\":\"192.168.1.101\",\"token\":\"def456\",\"locks\":[{\"id\":\"222\",\"name\":\"Büro\"}]}] (port optional, Standard: 8080; pollInterval optional in ms, Standard: 30000)",
+          "required": true
+        },
+        "name": {
+          "name": "Name",
+          "type": "string",
+          "required": true
+        },
+        "bridgeIp": {
+          "name": "Bridge IP",
+          "type": "ipv4",
           "required": true
         }
       }

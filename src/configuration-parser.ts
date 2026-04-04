@@ -1,34 +1,44 @@
 import { AddOn } from '@busch-jaeger/free-at-home';
-import { NukiBridgeConfig, AddOnConfiguration } from './types';
+import { NukiBridgeConfig, NukiLockConfig } from './types';
 
-// Konfigurations-Parser
 export class ConfigurationParser {
-  /**
-   * Extrahiert alle Bridge-Konfigurationen aus dem nukiBridges JSON-Array.
-   */
   static extractBridgeConfigs(config: AddOn.Configuration): NukiBridgeConfig[] {
-    const defaultConfig = config.default?.items as AddOnConfiguration | undefined;
+    const raw = config as Record<string, any>;
+    const bridgeGroup = raw['bridge'];
+    const lockGroup   = raw['lock'];
 
-    if (defaultConfig?.nukiBridges && typeof defaultConfig.nukiBridges === 'string') {
-      try {
-        const parsed = JSON.parse(defaultConfig.nukiBridges);
-        if (Array.isArray(parsed)) {
-          const bridges = parsed.filter((b: any): b is NukiBridgeConfig =>
-            b &&
-            typeof b.ip === 'string' && b.ip &&
-            typeof b.token === 'string' && b.token &&
-            Array.isArray(b.locks)
-          );
-          if (bridges.length > 0) {
-            return bridges;
-          }
-        }
-      } catch (error) {
-        console.error("Fehler beim Parsen der Bridge-Konfiguration:", error);
-      }
+    if (!bridgeGroup?.items) return [];
+
+    // Schlösser nach Bridge-IP gruppieren
+    const locksByBridgeIp = new Map<string, NukiLockConfig[]>();
+    for (const entry of Object.values((lockGroup?.items ?? {}) as Record<string, any>)) {
+      const lockId   = entry?.id       as string | undefined;
+      const lockName = entry?.name     as string | undefined;
+      const bIp      = entry?.bridgeIp as string | undefined;
+      if (!lockId || !lockName || !bIp) continue;
+      if (!locksByBridgeIp.has(bIp)) locksByBridgeIp.set(bIp, []);
+      locksByBridgeIp.get(bIp)!.push({ id: String(lockId), name: String(lockName) });
     }
 
-    console.warn("Keine gültige Bridge-Konfiguration gefunden");
-    return [];
+    const bridges: NukiBridgeConfig[] = [];
+    for (const entry of Object.values(bridgeGroup.items as Record<string, any>)) {
+      const ip    = entry?.ip    as string | undefined;
+      const token = entry?.token as string | undefined;
+      if (!ip || typeof ip !== 'string' || !token || typeof token !== 'string') continue;
+
+      bridges.push({
+        ip,
+        token,
+        port:         entry.port         ? Number(entry.port)         : undefined,
+        pollInterval: entry.pollInterval ? Number(entry.pollInterval) : undefined,
+        locks: locksByBridgeIp.get(ip) ?? [],
+      });
+    }
+
+    if (bridges.length === 0) {
+      console.warn("Keine gültige Bridge-Konfiguration gefunden");
+    }
+
+    return bridges;
   }
 }

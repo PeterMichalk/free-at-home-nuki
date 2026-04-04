@@ -126,6 +126,3 @@ export interface NukiBridgeLock {
   };
 }
 
-export interface AddOnConfiguration {
-  nukiBridges?: string;
-}
